@@ -96,7 +96,7 @@ Vérifie que le serveur est opérationnel.
 ```
 
 #### GET /api/slots
-Récupère **uniquement les slots DISPONIBLES** pour une plage de dates.
+Récupère **tous les slots** (disponibles et réservés) pour une plage de dates.
 
 **Query Parameters**
 - `start` (optionnel): Date de début au format `YYYY-MM-DD`. Par défaut: aujourd'hui + 2 jours
@@ -141,7 +141,7 @@ GET /api/slots?start=2025-01-22&end=2025-01-24
 ```
 
 #### GET /api/slots/{date}
-Récupère **uniquement les slots DISPONIBLES** pour une date spécifique.
+Récupère **tous les slots** (disponibles et réservés) pour une date spécifique.
 
 **Exemple de requête**
 ```

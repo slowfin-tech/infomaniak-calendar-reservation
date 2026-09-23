@@ -408,6 +408,7 @@ fn is_slot_conflicting(slot: &Slot, calendar_events: &[CalendarEvent]) -> bool {
 }
 
 /// Filtre les slots pour ne retourner que ceux disponibles (non réservés ET sans conflit calendrier)
+#[allow(dead_code)]
 async fn filter_available_slots(slots: Vec<Slot>, state: &web::Data<AppState>) -> Vec<Slot> {
     // Récupérer les événements du calendrier
     let calendar_events = fetch_calendar_events().await;
@@ -425,6 +426,26 @@ async fn filter_available_slots(slots: Vec<Slot>, state: &web::Data<AppState>) -
             }
             
             true
+        })
+        .collect()
+}
+
+/// Filtre les slots pour ne retourner que ceux SANS conflit calendrier
+/// et met à jour le champ booked en fonction de l'état de réservation
+/// (retourne TOUS les slots, y compris ceux déjà réservés)
+async fn filter_slots_with_status(slots: Vec<Slot>, state: &web::Data<AppState>) -> Vec<Slot> {
+    // Récupérer les événements du calendrier
+    let calendar_events = fetch_calendar_events().await;
+    
+    slots.into_iter()
+        .filter(|slot| {
+            // Ne filtrer que sur les conflits calendrier, pas sur la réservation
+            !is_slot_conflicting(slot, &calendar_events)
+        })
+        .map(|mut slot| {
+            // Mettre à jour le statut booked en fonction de l'état de réservation
+            slot.booked = state.is_booked(&slot.id);
+            slot
         })
         .collect()
 }
@@ -659,7 +680,7 @@ async fn health() -> impl Responder {
     }))
 }
 
-/// Récupère les slots DISPONIBLES pour une date spécifique (format: YYYY-MM-DD)
+/// Récupère TOUS les slots (y compris réservés) pour une date spécifique (format: YYYY-MM-DD)
 #[get("/api/slots/{date}")]
 async fn get_slots_by_date(
     date_str: web::Path<String>,
@@ -669,12 +690,12 @@ async fn get_slots_by_date(
     match NaiveDate::parse_from_str(&date_str, "%Y-%m-%d") {
         Ok(date) => {
             let all_slots = generate_slots_for_date(date, &get_visio_base_url());
-            let available_slots = filter_available_slots(all_slots, &state).await;
+            let slots_with_status = filter_slots_with_status(all_slots, &state).await;
             
             // Créer la réponse avec le nouveau format
             let response = DaySlots {
                 date: date_str,
-                slots: available_slots,
+                slots: slots_with_status,
             };
             
             Ok(HttpResponse::Ok().json(json!({
@@ -734,11 +755,11 @@ async fn get_slots_range(
     }
 
     let all_slots = generate_slots_for_range(start_date, end_date, &get_visio_base_url());
-    let available_slots = filter_available_slots(all_slots, &state).await;
+    let slots_with_status = filter_slots_with_status(all_slots, &state).await;
     
     // Grouper les slots par date
     let mut slots_by_date: HashMap<String, Vec<Slot>> = HashMap::new();
-    for slot in available_slots {
+    for slot in slots_with_status {
         slots_by_date.entry(slot.date.clone()).or_default().push(slot);
     }
     
@@ -892,8 +913,8 @@ async fn index() -> impl Responder {
         "description": "API for managing SAV appointment slots with Infomaniak KMeet integration",
         "endpoints": {
             "/api/health": "GET - Health check",
-            "/api/slots": "GET - Get AVAILABLE slots for date range (query: start, end)",
-            "/api/slots/{date}": "GET - Get AVAILABLE slots for specific date (YYYY-MM-DD)",
+            "/api/slots": "GET - Get ALL slots (including booked) for date range (query: start, end)",
+            "/api/slots/{date}": "GET - Get ALL slots (including booked) for specific date (YYYY-MM-DD)",
             "/api/slots/{slot_id}/booking": "GET - Get booking details for a specific slot (includes KMeet URL)",
             "/api/slots/{slot_id}/book": "POST - Book a specific slot (minimum 2 days in advance). Body: {customer_name?, customer_email?}"
         },
