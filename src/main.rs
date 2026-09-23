@@ -723,6 +723,17 @@ struct SlotBookingDetails {
     kmeet_url: Option<String>,
 }
 
+/// Représente un événement du calendrier
+#[derive(Debug, Serialize)]
+struct CalendarEvent {
+    /// Titre/summary de l'événement
+    summary: String,
+    /// Date/heure de début (format ISO 8601)
+    start: String,
+    /// Date/heure de fin (format ISO 8601)
+    end: String,
+}
+
 // ============================================================================
 // API Endpoints
 // ============================================================================
@@ -973,7 +984,8 @@ async fn index() -> impl Responder {
             "/api/slots": "GET - Get ALL slots (including booked) for date range (query: start, end)",
             "/api/slots/{date}": "GET - Get ALL slots (including booked) for specific date (YYYY-MM-DD)",
             "/api/slots/{slot_id}/booking": "GET - Get booking details for a specific slot (includes KMeet URL)",
-            "/api/slots/{slot_id}/book": "POST - Book a specific slot (minimum 2 days in advance). Body: {customer_name?, customer_email?}"
+            "/api/slots/{slot_id}/book": "POST - Book a specific slot (minimum 2 days in advance). Body: {customer_name?, customer_email?}",
+            "/api/calendar/events": "GET - Get calendar events for the current week"
         },
         "slot_duration": "30 minutes",
         "opening_hours": {
@@ -991,6 +1003,69 @@ async fn index() -> impl Responder {
             "kmeet_api_configured": get_kmeet_api_token().is_some()
         }
     }))
+}
+
+/// Récupère les événements du calendrier pour la semaine en cours
+#[get("/api/calendar/events")]
+async fn get_calendar_events() -> Result<impl Responder> {
+    // Récupérer les événements CalDAV
+    let ics_content = match fetch_caldav_events().await {
+        Some(content) => content,
+        None => {
+            return Ok(HttpResponse::ServiceUnavailable().json(json!({
+                "error": "Failed to fetch CalDAV events",
+                "status": "unavailable"
+            })));
+        }
+    };
+    
+    let events = parse_ics_events(&ics_content);
+    
+    // Obtenir la date de début de la semaine (lundi)
+    let today = Utc::now();
+    let today_date = today.date_naive();
+    
+    // Calculer le lundi de la semaine en cours
+    let weekday = today_date.weekday();
+    let days_to_monday = match weekday {
+        chrono::Weekday::Mon => 0,
+        chrono::Weekday::Tue => 1,
+        chrono::Weekday::Wed => 2,
+        chrono::Weekday::Thu => 3,
+        chrono::Weekday::Fri => 4,
+        chrono::Weekday::Sat => 5,
+        chrono::Weekday::Sun => 6,
+    };
+    let monday = today_date - Duration::days(days_to_monday);
+    let sunday = monday + Duration::days(6);
+    
+    let sunday_end = sunday.and_time(NaiveTime::from_hms_opt(23, 59, 59).unwrap());
+    let monday_start = monday.and_time(NaiveTime::from_hms_opt(0, 0, 0).unwrap());
+    let monday_start_utc = Utc.from_utc_datetime(&monday_start);
+    let sunday_end_utc = Utc.from_utc_datetime(&sunday_end);
+    
+    // Filtrer les événements de la semaine
+    let week_events: Vec<CalendarEvent> = events
+        .into_iter()
+        .filter(|(start, end, _)| {
+            // Un événement est dans la semaine s'il commence avant la fin de la semaine
+            // et se termine après le début de la semaine
+            *start < sunday_end_utc + Duration::seconds(1) && *end > monday_start_utc
+        })
+        .map(|(start, end, summary)| {
+            CalendarEvent {
+                summary,
+                start: start.format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+                end: end.format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+            }
+        })
+        .collect();
+    
+    Ok(HttpResponse::Ok().json(json!({
+        "week_start": monday.format("%Y-%m-%d").to_string(),
+        "week_end": sunday.format("%Y-%m-%d").to_string(),
+        "events": week_events
+    })))
 }
 
 // ============================================================================
@@ -1031,6 +1106,7 @@ async fn main() -> std::io::Result<()> {
             .service(get_slots_range)
             .service(get_slot_booking_details)
             .service(book_slot)
+            .service(get_calendar_events)
     })
     .bind("127.0.0.1:8080")?
     .run()
