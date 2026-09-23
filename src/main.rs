@@ -246,6 +246,12 @@ fn parse_ics_content(content: &str) -> Vec<CalendarEvent> {
                 // Parse ISO 8601 duration format like PT30M, PT1H, etc.
                 if let Some(dur) = parse_ics_duration(duration_str) {
                     event.duration = Some(dur);
+                    // Calculer end = start + duration
+                    // On vérifie que start a été parsé (différent de la valeur par défaut)
+                    // en vérifiant que dtstart_raw est défini (car il est mis à jour en même temps que start)
+                    if event.dtstart_raw.is_some() {
+                        event.end = event.start + dur;
+                    }
                 }
             }
         }
@@ -352,7 +358,12 @@ fn expand_recurring_events(events: Vec<CalendarEvent>) -> Vec<CalendarEvent> {
                     let new_start = Utc.from_utc_datetime(&current_date.and_time(original_time));
                     
                     // Calculer la fin en utilisant la durée de l'événement original
-                    let duration = event.end - event.start;
+                    // Préférer le champ duration s'il est disponible, sinon calculer depuis start/end
+                    let duration = if let Some(dur) = event.duration {
+                        dur
+                    } else {
+                        event.end - event.start
+                    };
                     let new_end = new_start + duration;
                     
                     // Créer l'occurrence
@@ -430,21 +441,22 @@ async fn filter_available_slots(slots: Vec<Slot>, state: &web::Data<AppState>) -
         .collect()
 }
 
-/// Filtre les slots pour ne retourner que ceux SANS conflit calendrier
-/// et met à jour le champ booked en fonction de l'état de réservation
-/// (retourne TOUS les slots, y compris ceux déjà réservés)
+/// Filtre les slots et met à jour le champ booked en fonction de l'état de réservation
+/// et des conflits calendrier.
+/// Un slot est marqué comme booked: true si :
+/// - Il est réservé via l'API
+/// - OU il est en conflit avec un événement du calendrier
+/// (retourne TOUS les slots valides)
 async fn filter_slots_with_status(slots: Vec<Slot>, state: &web::Data<AppState>) -> Vec<Slot> {
     // Récupérer les événements du calendrier
     let calendar_events = fetch_calendar_events().await;
     
     slots.into_iter()
-        .filter(|slot| {
-            // Ne filtrer que sur les conflits calendrier, pas sur la réservation
-            !is_slot_conflicting(slot, &calendar_events)
-        })
         .map(|mut slot| {
-            // Mettre à jour le statut booked en fonction de l'état de réservation
-            slot.booked = state.is_booked(&slot.id);
+            // Mettre à jour le statut booked en fonction de :
+            // 1. L'état de réservation via l'API
+            // 2. OU s'il y a un conflit avec le calendrier
+            slot.booked = state.is_booked(&slot.id) || is_slot_conflicting(&slot, &calendar_events);
             slot
         })
         .collect()
