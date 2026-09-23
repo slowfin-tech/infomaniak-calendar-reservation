@@ -1,5 +1,6 @@
 use actix_web::{get, post, web, App, HttpResponse, HttpServer, Responder, Result};
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc, Datelike, Duration};
+use reqwest::Method;
 use dotenvy::dotenv;
 use reqwest;
 use serde::{Deserialize, Serialize};
@@ -367,113 +368,149 @@ async fn create_kmeet_room(
 // ============================================================================
 
 /// Récupère les variables d'environnement CalDAV
+/// Extrait le username du login (avant le @ pour Infomaniak)
 fn get_caldav_config() -> Option<(String, String, String)> {
     let url = std::env::var("CALDAV_URL").ok()?;
     let login = std::env::var("CALDAV_LOGIN").ok()?;
     let password = std::env::var("CALDAV_PASSWORD").ok()?;
-    Some((url, login, password))
+    
+    // Pour Infomaniak, le login est au format user@sync.infomaniak.com
+    // mais l'authentification CalDAV utilise juste la partie user
+    let username = login.split('@').next().unwrap_or(&login).to_string();
+    
+    Some((url, username, password))
 }
 
-/// Récupère l'URL du calendrier KCalendar depuis les variables d'environnement
-fn get_kcalendar_url() -> Option<String> {
-    std::env::var("KCALENDAR_URL").ok()
-}
-
-/// Construit l'URL complète du calendrier CalDAV pour Infomaniak
-/// Format: https://sync.infomaniak.com/calendars/{user_id}/{calendar_id}
+/// Construit l'URL du calendrier CalDAV à partir des informations disponibles
+/// Infomaniak: https://sync.infomaniak.com/calendars/{user_id}/{calendar_id}/
 fn build_caldav_calendar_url() -> Option<String> {
-    let kcalendar_url = get_kcalendar_url()?;
-    // Extraire l'ID du calendrier de l'URL KCalendar
-    // Format: https://sync.infomaniak.com/calendars/ND04237/f28b6a18-5cdd-410b-9cc4-ae95932ff536?export
-    let parts: Vec<&str> = kcalendar_url.split("/calendars/").collect();
-    if parts.len() < 2 {
-        return None;
+    // Extraire user_id et calendar_id de CALDAV_LOGIN
+    // CALDAV_LOGIN est au format: ND04237@sync.infomaniak.com ou user@sync.infomaniak.com
+    let login = std::env::var("CALDAV_LOGIN").ok()?;
+    
+    // Extraire le user_id (avant le @)
+    let user_id = login.split('@').next()?;
+    
+    // Pour Infomaniak, le calendar_id peut être dans KCALENDAR_URL ou on utilise un ID par défaut
+    // Essayer de récupérer depuis KCALENDAR_URL si disponible
+    if let Ok(kcalendar_url) = std::env::var("KCALENDAR_URL") {
+        let parts: Vec<&str> = kcalendar_url.split("/calendars/").collect();
+        if parts.len() >= 2 {
+            let calendar_path = parts[1].split('?').next().unwrap_or("");
+            // calendar_path est au format user_id/calendar_id
+            let path_parts: Vec<&str> = calendar_path.split('/').collect();
+            if path_parts.len() >= 2 {
+                let caldav_url = std::env::var("CALDAV_URL").unwrap_or_else(|_| "https://sync.infomaniak.com/".to_string());
+                let caldav_base = caldav_url.trim_end_matches('/');
+                return Some(format!("{}/calendars/{}", caldav_base, calendar_path));
+            }
+        }
     }
-    let calendar_path = parts[1].split('?').next().unwrap_or("");
     
+    // Sinon, utiliser une URL par défaut avec le user_id
     let caldav_url = std::env::var("CALDAV_URL").unwrap_or_else(|_| "https://sync.infomaniak.com/".to_string());
-    
-    // Nettoyer les slashes de fin
     let caldav_base = caldav_url.trim_end_matches('/');
     
-    Some(format!("{}/calendars/{}", caldav_base, calendar_path))
+    // Pour Infomaniak, chaque utilisateur a un calendrier par défaut
+    // L'URL est typiquement: https://sync.infomaniak.com/calendars/{user_id}/default/
+    Some(format!("{}/calendars/{}/default/", caldav_base, user_id))
 }
 
-/// Récupère le calendrier ICS depuis CalDAV ou KCalendar
-/// Infomaniak supporte l'export ICS via l'URL KCalendar avec authentification
-async fn fetch_ics_calendar() -> Option<String> {
+/// Récupère les événements CalDAV en utilisant le protocole REPORT
+/// Utilise une requête CalDAV calendar-query pour récupérer les VEVENT
+async fn fetch_caldav_events() -> Option<String> {
+    let calendar_url = build_caldav_calendar_url()?;
+    let (_, login, password) = get_caldav_config()?;
+    
     let client = reqwest::Client::new();
     
-    // Essayer d'abord avec KCalendar URL (export ICS)
-    if let Some(kcalendar_url) = get_kcalendar_url() {
-        // Ajouter l'authentification si disponible
-        if let Some((_, login, password)) = get_caldav_config() {
-            let response = match client
-                .get(&kcalendar_url)
-                .basic_auth(&login, Some(&password))
-                .send()
-                .await
-            {
-                Ok(resp) => resp,
-                Err(e) => {
-                    eprintln!("Failed to fetch KCalendar: {}", e);
-                    return None;
-                }
-            };
-            
-            if response.status().is_success() {
-                return response.text().await.ok();
-            }
-        } else {
-            // Essayer sans authentification
-            let response = match client
-                .get(&kcalendar_url)
-                .send()
-                .await
-            {
-                Ok(resp) => resp,
-                Err(e) => {
-                    eprintln!("Failed to fetch KCalendar: {}", e);
-                    return None;
-                }
-            };
-            
-            if response.status().is_success() {
-                return response.text().await.ok();
-            }
+    // Requête REPORT pour récupérer les événements du calendrier
+    // Utilise calendar-query pour obtenir les VEVENT
+    let report_xml = r#"<?xml version="1.0" encoding="utf-8" ?>
+<C:calendar-query xmlns:C="urn:ietf:params:xml:ns:caldav">
+    <D:prop xmlns:D="DAV:">
+        <C:calendar-data/>
+    </D:prop>
+    <C:filter>
+        <C:comp-filter name="VCALENDAR">
+            <C:comp-filter name="VEVENT">
+                <C:time-range start="19700101T000000Z"/>
+            </C:comp-filter>
+        </C:comp-filter>
+    </C:filter>
+</C:calendar-query>"#;
+    
+    // Créer une méthode REPORT personnalisée
+    let method = Method::from_bytes(b"REPORT").unwrap();
+    
+    let response = match client
+        .request(method, &calendar_url)
+        .header("Content-Type", "application/xml; charset=utf-8")
+        .header("Depth", "1")
+        .basic_auth(&login, Some(&password))
+        .body(report_xml.to_string())
+        .send()
+        .await
+    {
+        Ok(resp) => resp,
+        Err(e) => {
+            eprintln!("Failed to send CalDAV REPORT request: {}", e);
+            return None;
         }
+    };
+    
+    if !response.status().is_success() {
+        eprintln!("CalDAV REPORT failed: HTTP {}", response.status());
+        // Afficher le corps de la réponse pour le debug
+        if let Ok(body) = response.text().await {
+            eprintln!("Response body: {}", body);
+        }
+        return None;
     }
     
-    // Sinon, essayer de construire l'URL CalDAV avec ?export
-    if let Some(calendar_url) = build_caldav_calendar_url() {
-        if let Some((_, login, password)) = get_caldav_config() {
-            // Ajouter ?export à l'URL
-            let export_url = if calendar_url.contains('?') {
-                format!("{}&export", calendar_url)
+    // Lire la réponse XML
+    let xml_response = match response.text().await {
+        Ok(text) => text,
+        Err(e) => {
+            eprintln!("Failed to read CalDAV response: {}", e);
+            return None;
+        }
+    };
+    
+    // Extraire le contenu ICS de la réponse XML
+    // Chercher entre <C:calendar-data>, <cal:calendar-data>, etc.
+    // La réponse peut contenir plusieurs calendar-data avec différents namespaces
+    let mut ics_parts = Vec::new();
+    
+    // Essayer différents namespaces
+    let markers = [
+        ("<C:calendar-data>", "</C:calendar-data>"),
+        ("<cal:calendar-data>", "</cal:calendar-data>"),
+        ("<calendar-data>", "</calendar-data>"),
+    ];
+    
+    for (start_marker, end_marker) in &markers {
+        let mut current_remaining = &xml_response[..];
+        while let Some(start_idx) = current_remaining.find(start_marker) {
+            if let Some(end_idx) = current_remaining[start_idx + start_marker.len()..].find(end_marker) {
+                let content_start = start_idx + start_marker.len();
+                let content_end = content_start + end_idx;
+                let content = &current_remaining[content_start..content_end];
+                ics_parts.push(content);
+                current_remaining = &current_remaining[content_end..];
             } else {
-                format!("{}/?export", calendar_url)
-            };
-            
-            let response = match client
-                .get(&export_url)
-                .basic_auth(&login, Some(&password))
-                .send()
-                .await
-            {
-                Ok(resp) => resp,
-                Err(e) => {
-                    eprintln!("Failed to fetch CalDAV export: {}", e);
-                    return None;
-                }
-            };
-            
-            if response.status().is_success() {
-                return response.text().await.ok();
+                break;
             }
         }
     }
     
-    None
+    if ics_parts.is_empty() {
+        eprintln!("No calendar-data found in CalDAV response");
+        return None;
+    }
+    
+    // Concatenner tous les contenus ICS
+    Some(ics_parts.join(""))
 }
 
 /// Parse une date/heure au format ICS avec ou sans paramètres
@@ -629,8 +666,8 @@ fn is_slot_in_conflict(slot_date: NaiveDate, slot_start: NaiveTime, slot_end: Na
 
 /// Charge les événements CalDAV et met à jour l'état des slots réservés
 async fn load_caldav_events_and_update_slots(state: &web::Data<AppState>) -> Vec<(DateTime<Utc>, DateTime<Utc>, String)> {
-    // Récupérer le calendrier ICS
-    if let Some(ics_content) = fetch_ics_calendar().await {
+    // Récupérer les événements via CalDAV
+    if let Some(ics_content) = fetch_caldav_events().await {
         let events = parse_ics_events(&ics_content);
         
         eprintln!("Loaded {} events from CalDAV", events.len());
