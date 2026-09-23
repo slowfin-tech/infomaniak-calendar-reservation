@@ -29,7 +29,8 @@ struct SlotsQueryParams {
 struct Slot {
     /// Identifiant unique du slot
     id: String,
-    /// Date du rendez-vous (format YYYY-MM-DD)
+    /// Date du rendez-vous (format YYYY-MM-DD) - non inclus dans le JSON
+    #[serde(skip_serializing)]
     date: String,
     /// Heure de début (format HH:MM)
     start_time: String,
@@ -621,8 +622,17 @@ fn get_kcalendar_url() -> Option<String> {
 }
 
 // ============================================================================
-// API Endpoints
+// API Response Structures
 // ============================================================================
+
+/// Réponse pour un jour avec ses slots
+#[derive(Debug, Serialize)]
+struct DaySlots {
+    /// Date du jour (format YYYY-MM-DD)
+    date: String,
+    /// Liste des slots disponibles pour ce jour
+    slots: Vec<Slot>,
+}
 
 /// Réponse pour les détails d'un slot réservé
 #[derive(Debug, Serialize)]
@@ -634,6 +644,11 @@ struct SlotBookingDetails {
     /// URL KMeet si disponible
     kmeet_url: Option<String>,
 }
+
+// ============================================================================
+// API Endpoints
+// ============================================================================
+
 
 /// Endpoint de santé
 #[get("/api/health")]
@@ -655,10 +670,15 @@ async fn get_slots_by_date(
         Ok(date) => {
             let all_slots = generate_slots_for_date(date, &get_visio_base_url());
             let available_slots = filter_available_slots(all_slots, &state).await;
+            
+            // Créer la réponse avec le nouveau format
+            let response = DaySlots {
+                date: date_str,
+                slots: available_slots,
+            };
+            
             Ok(HttpResponse::Ok().json(json!({
-                "date": date_str,
-                "count": available_slots.len(),
-                "slots": available_slots
+                "days": [response]
             })))
         }
         Err(_) => {
@@ -716,11 +736,23 @@ async fn get_slots_range(
     let all_slots = generate_slots_for_range(start_date, end_date, &get_visio_base_url());
     let available_slots = filter_available_slots(all_slots, &state).await;
     
+    // Grouper les slots par date
+    let mut slots_by_date: HashMap<String, Vec<Slot>> = HashMap::new();
+    for slot in available_slots {
+        slots_by_date.entry(slot.date.clone()).or_default().push(slot);
+    }
+    
+    // Convertir en vecteur de DaySlots trié par date
+    let mut days: Vec<DaySlots> = slots_by_date
+        .into_iter()
+        .map(|(date, slots)| DaySlots { date, slots })
+        .collect();
+    
+    // Trier par date
+    days.sort_by(|a, b| a.date.cmp(&b.date));
+    
     Ok(HttpResponse::Ok().json(json!({
-        "start_date": start_date.format("%Y-%m-%d").to_string(),
-        "end_date": end_date.format("%Y-%m-%d").to_string(),
-        "count": available_slots.len(),
-        "slots": available_slots
+        "days": days
     })))
 }
 

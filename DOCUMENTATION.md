@@ -66,12 +66,13 @@ VISIO_BASE_URL=https://meet.kmeet.infomaniak.com/sav
 ```json
 {
   "id": "202501200930",
-  "date": "2025-01-20",
   "start_time": "09:30",
   "end_time": "10:00",
   "booked": false
 }
 ```
+
+**Note** : Le champ `date` a été supprimé du slot car il est déjà présent au niveau du `day` parent.
 
 ## Règles de Réservation
 
@@ -109,10 +110,33 @@ GET /api/slots?start=2025-01-22&end=2025-01-24
 **Réponse**
 ```json
 {
-  "start_date": "2025-01-22",
-  "end_date": "2025-01-24",
-  "count": 18,
-  "slots": [...]
+  "days": [
+    {
+      "date": "2025-01-22",
+      "slots": [
+        {
+          "id": "202501220930",
+          "start_time": "09:30",
+          "end_time": "10:00",
+          "booked": false
+        },
+        {
+          "id": "202501221000",
+          "start_time": "10:00",
+          "end_time": "10:30",
+          "booked": false
+        }
+      ]
+    },
+    {
+      "date": "2025-01-23",
+      "slots": [...]
+    },
+    {
+      "date": "2025-01-24",
+      "slots": [...]
+    }
+  ]
 }
 ```
 
@@ -127,9 +151,25 @@ GET /api/slots/2025-01-22
 **Réponse**
 ```json
 {
-  "date": "2025-01-22",
-  "count": 9,
-  "slots": [...]
+  "days": [
+    {
+      "date": "2025-01-22",
+      "slots": [
+        {
+          "id": "202501220930",
+          "start_time": "09:30",
+          "end_time": "10:00",
+          "booked": false
+        },
+        {
+          "id": "202501221000",
+          "start_time": "10:00",
+          "end_time": "10:30",
+          "booked": false
+        }
+      ]
+    }
+  ]
 }
 ```
 
