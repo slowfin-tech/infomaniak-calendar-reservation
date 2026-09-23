@@ -378,8 +378,7 @@ fn get_caldav_config() -> Option<(String, String, String)> {
 }
 
 /// Construit l'URL du calendrier CalDAV à partir des informations disponibles
-/// Construit l'URL du calendrier CalDAV à partir des informations disponibles
-/// Priorité: CALDAV_CALENDAR_URI > KCALENDAR_URL > default
+/// Priorité: CALDAV_CALENDAR_URI > CALDAV_LOGIN
 fn build_caldav_calendar_url() -> Option<String> {
     // Essayer CALDAV_CALENDAR_URI en premier (format: /calendars/ND04237/f28b6a18-5cdd-410b-9cc4-ae95932ff536/)
     if let Ok(calendar_uri) = std::env::var("CALDAV_CALENDAR_URI") {
@@ -387,17 +386,6 @@ fn build_caldav_calendar_url() -> Option<String> {
         let caldav_base = caldav_url.trim_end_matches('/');
         let uri_clean = calendar_uri.trim_start_matches('/');
         return Some(format!("{}/{}", caldav_base, uri_clean));
-    }
-    
-    // Sinon, essayer depuis KCALENDAR_URL
-    if let Ok(kcalendar_url) = std::env::var("KCALENDAR_URL") {
-        let parts: Vec<&str> = kcalendar_url.split("/calendars/").collect();
-        if parts.len() >= 2 {
-            let calendar_path = parts[1].split('?').next().unwrap_or("");
-            let caldav_url = std::env::var("CALDAV_URL").unwrap_or_else(|_| "https://sync.infomaniak.com/".to_string());
-            let caldav_base = caldav_url.trim_end_matches('/');
-            return Some(format!("{}/calendars/{}", caldav_base, calendar_path));
-        }
     }
     
     // Sinon, utiliser une URL par défaut avec CALDAV_LOGIN
@@ -506,31 +494,102 @@ async fn fetch_caldav_events() -> Option<String> {
     Some(ics_parts.join(""))
 }
 
+/// Vérifie si une date est en heure d'été (CEST) pour Europe/Zurich
+/// CEST: dernier dimanche de mars au dernier dimanche d'octobre (UTC+2)
+/// CET: le reste de l'année (UTC+1)
+fn is_dst_europe_zurich(date: NaiveDate) -> bool {
+    let year = date.year();
+    
+    // Trouver le dernier dimanche de mars
+    let mut march_last = NaiveDate::from_ymd_opt(year, 3, 31).unwrap();
+    while march_last.weekday() != chrono::Weekday::Sun {
+        march_last = march_last.pred_opt().unwrap();
+    }
+    
+    // Trouver le dernier dimanche d'octobre
+    let mut october_last = NaiveDate::from_ymd_opt(year, 10, 31).unwrap();
+    while october_last.weekday() != chrono::Weekday::Sun {
+        october_last = october_last.pred_opt().unwrap();
+    }
+    
+    // Vérifier si la date est dans la période DST (CEST)
+    date >= march_last && date < october_last
+}
+
+/// Obtient l'offset en heures pour un timezone donné
+fn get_timezone_offset(tzid: &str, date: NaiveDateTime) -> i64 {
+    match tzid {
+        "Europe/Zurich" => {
+            if is_dst_europe_zurich(date.date()) {
+                // CEST: UTC+2
+                2
+            } else {
+                // CET: UTC+1
+                1
+            }
+        }
+        _ => {
+            // TZID inconnu, supposer UTC
+            0
+        }
+    }
+}
+
 /// Parse une date/heure au format ICS avec ou sans paramètres
-/// Exemples: 20250120T093000Z, 20250120T093000, 20250120T093000 (avec TZID=Europe/Zurich)
+/// Exemples: 20250120T093000Z, 20250120T093000, DTSTART;TZID=Europe/Zurich:20260911T140000
 fn parse_ics_datetime(dt_str: &str) -> Option<DateTime<Utc>> {
-    // Extraire la valeur après le :
-    let value = if let Some(idx) = dt_str.find(':') {
-        &dt_str[idx+1..]
+    // Extraire la valeur après le dernier : (pour gérer les paramètres comme TZID=...)
+    let colon_idx = dt_str.rfind(':')?;
+    let value = &dt_str[colon_idx + 1..];
+    
+    // Extraire le TZID s'il est présent dans la partie avant le :
+    // Format: DTSTART;TZID=Europe/Zurich
+    let prop_part = &dt_str[..colon_idx];
+    let tzid = if let Some(tzid_start) = prop_part.find("TZID=") {
+        let tzid_start_idx = tzid_start + 5;
+        let tzid_end = prop_part[tzid_start_idx..]
+            .find(';')
+            .map(|i| tzid_start_idx + i)
+            .unwrap_or(prop_part.len());
+        Some(&prop_part[tzid_start_idx..tzid_end])
     } else {
-        dt_str
+        None
     };
     
     // Essayer de parser avec timezone UTC (Z)
     if value.ends_with('Z') {
         let naive_str = &value[..value.len()-1];
         let naive = NaiveDateTime::parse_from_str(naive_str, "%Y%m%dT%H%M%S").ok()?;
-        Some(Utc.from_utc_datetime(&naive))
-    } else if let Ok(naive) = NaiveDateTime::parse_from_str(value, "%Y%m%dT%H%M%S") {
-        // Pas de timezone explicite, supposer UTC
-        // Note: On devrait idéalement utiliser le TZID du VTIMEZONE, mais pour simplifier on convertit en UTC
-        Some(Utc.from_utc_datetime(&naive))
-    } else if let Ok(date) = NaiveDate::parse_from_str(value, "%Y%m%d") {
-        // Date seule
-        Some(Utc.from_utc_datetime(&date.and_time(NaiveTime::from_hms_opt(0, 0, 0).unwrap())))
-    } else {
-        None
+        return Some(Utc.from_utc_datetime(&naive));
     }
+    
+    // Parser comme NaiveDateTime
+    if let Ok(naive) = NaiveDateTime::parse_from_str(value, "%Y%m%dT%H%M%S") {
+        // Appliquer l'offset du timezone si présent
+        if let Some(tz) = tzid {
+            let offset_hours = get_timezone_offset(tz, naive);
+            // Le naive datetime est dans le timezone local, il faut le convertir en UTC
+            // Si la date est à 14:00 Europe/Zurich (UTC+2), alors en UTC c'est 12:00
+            // Donc on soustrait l'offset
+            return Some(Utc.from_utc_datetime(&naive) - Duration::hours(offset_hours));
+        } else {
+            // Pas de timezone explicite, supposer UTC
+            return Some(Utc.from_utc_datetime(&naive));
+        }
+    }
+    
+    // Parser comme date seule
+    if let Ok(date) = NaiveDate::parse_from_str(value, "%Y%m%d") {
+        let naive = date.and_time(NaiveTime::from_hms_opt(0, 0, 0).unwrap());
+        if let Some(tz) = tzid {
+            let offset_hours = get_timezone_offset(tz, naive);
+            return Some(Utc.from_utc_datetime(&naive) - Duration::hours(offset_hours));
+        } else {
+            return Some(Utc.from_utc_datetime(&naive));
+        }
+    }
+    
+    None
 }
 
 /// Parse une date au format ICS (ex: 20250120)
@@ -538,10 +597,171 @@ fn parse_ics_date(date_str: &str) -> Option<NaiveDate> {
     NaiveDate::parse_from_str(date_str, "%Y%m%d").ok()
 }
 
-/// Parse un fichier ICS et extrait les événements
+/// Représente un événement ICS brut avec ses propriétés
+struct RawIcsEvent {
+    start: DateTime<Utc>,
+    end: DateTime<Utc>,
+    summary: String,
+    rrule: Option<String>,
+    until: Option<DateTime<Utc>>,
+    count: Option<i32>,
+}
+
+/// Parse une règle de récurrence (RRULE) basique
+/// Retourne une liste de dates d'occurrence
+fn expand_rrule_events(base_event: &RawIcsEvent, until: DateTime<Utc>) -> Vec<(DateTime<Utc>, DateTime<Utc>, String)> {
+    let mut occurrences = Vec::new();
+    
+    let rrule = match &base_event.rrule {
+        Some(r) => r,
+        None => return vec![(base_event.start, base_event.end, base_event.summary.clone())],
+    };
+    
+    // Parser la RRULE
+    // Format: FREQ=DAILY;INTERVAL=1;UNTIL=... ou FREQ=WEEKLY;BYDAY=MO,TU;INTERVAL=1
+    let parts: Vec<&str> = rrule.split(';').collect();
+    let mut freq = None;
+    let mut interval = 1;
+    let mut byday = None;
+    let mut rrule_until = base_event.until;
+    
+    for part in parts {
+        if let Some((key, value)) = part.split_once('=') {
+            match key {
+                "FREQ" => freq = Some(value),
+                "INTERVAL" => interval = value.parse().unwrap_or(1),
+                "UNTIL" => {
+                    // Parser la date UNTIL
+                    if let Some(dt) = parse_ics_datetime(&format!("UNTIL:{}", value)) {
+                        rrule_until = Some(dt);
+                    }
+                }
+                "BYDAY" => byday = Some(value),
+                _ => {}
+            }
+        }
+    }
+    
+    // Si pas de FREQ, retourner juste l'événement de base
+    let freq = match freq {
+        Some(f) => f,
+        None => return vec![(base_event.start, base_event.end, base_event.summary.clone())],
+    };
+    
+    // Calculer la date de fin de l'expansion
+    let expand_until = rrule_until.unwrap_or(until);
+    
+    match freq {
+        "DAILY" => {
+            // Générer une occurrence par jour
+            let mut current_start = base_event.start;
+            let mut current_end = base_event.end;
+            let event_duration = base_event.end - base_event.start;
+            
+            while current_start <= expand_until {
+                occurrences.push((current_start, current_end, base_event.summary.clone()));
+                current_start = current_start + chrono::Duration::days(interval as i64);
+                current_end = current_start + event_duration;
+            }
+        }
+        "WEEKLY" => {
+            // Générer une occurrence par semaine
+            let event_duration = base_event.end - base_event.start;
+            
+            // Parser BYDAY (ex: MO,TU,WE,TH,FR)
+            let weekdays: Vec<chrono::Weekday> = byday
+                .map(|bd| {
+                    bd.split(',')
+                        .filter_map(|d| match d {
+                            "MO" => Some(chrono::Weekday::Mon),
+                            "TU" => Some(chrono::Weekday::Tue),
+                            "WE" => Some(chrono::Weekday::Wed),
+                            "TH" => Some(chrono::Weekday::Thu),
+                            "FR" => Some(chrono::Weekday::Fri),
+                            "SA" => Some(chrono::Weekday::Sat),
+                            "SU" => Some(chrono::Weekday::Sun),
+                            _ => None,
+                        })
+                        .collect()
+                })
+                .unwrap_or_else(|| vec![base_event.start.weekday()]);
+            
+            let mut current_start = base_event.start;
+            
+            // Trouver le premier jour qui match BYDAY
+            while current_start <= expand_until {
+                if weekdays.contains(&current_start.weekday()) {
+                    let current_end = current_start + event_duration;
+                    if current_start >= base_event.start {
+                        occurrences.push((current_start, current_end, base_event.summary.clone()));
+                    }
+                }
+                current_start = current_start + chrono::Duration::days(1);
+            }
+            
+            // Si INTERVAL > 1, ne garder qu'une semaine sur INTERVAL
+            if interval > 1 && !weekdays.is_empty() {
+                let mut filtered = Vec::new();
+                let mut week_counter = 0;
+                for (i, &(start, end, ref summary)) in occurrences.iter().enumerate() {
+                    if i > 0 && start.weekday() == occurrences[0].0.weekday() {
+                        week_counter += 1;
+                    }
+                    if week_counter % interval == 0 {
+                        filtered.push((start, end, summary.clone()));
+                    }
+                }
+                occurrences = filtered;
+            }
+        }
+        "MONTHLY" => {
+            // Pour simplifier, générer une occurrence par mois à la même date
+            let event_duration = base_event.end - base_event.start;
+            let mut current_start = base_event.start;
+            
+            while current_start <= expand_until {
+                occurrences.push((current_start, current_start + event_duration, base_event.summary.clone()));
+                // Passer au mois suivant
+                if current_start.day() < 28 {
+                    current_start = current_start + chrono::Duration::days(30 - current_start.day() as i64);
+                } else {
+                    current_start = current_start + chrono::Duration::days(35 - current_start.day() as i64);
+                }
+                // Simplification: on ne gère pas parfaitement le dernier jour du mois
+                current_start = current_start.with_day(1).unwrap_or(current_start) + chrono::Duration::days(1);
+                if current_start.day() != base_event.start.day() && base_event.start.day() <= 28 {
+                    current_start = current_start.with_day(base_event.start.day()).unwrap_or(current_start);
+                }
+            }
+        }
+        "YEARLY" => {
+            // Générer une occurrence par an
+            let event_duration = base_event.end - base_event.start;
+            let mut current_start = base_event.start;
+            
+            while current_start <= expand_until {
+                occurrences.push((current_start, current_start + event_duration, base_event.summary.clone()));
+                current_start = current_start + chrono::Duration::days(365);
+            }
+        }
+        _ => {
+            // FREQ non supportée, retourner juste l'événement de base
+            occurrences.push((base_event.start, base_event.end, base_event.summary.clone()));
+        }
+    }
+    
+    // Si COUNT est spécifié, limiter le nombre d'occurrences
+    if let Some(count) = base_event.count {
+        occurrences.truncate(count as usize);
+    }
+    
+    occurrences
+}
+
+/// Parse un fichier ICS et extrait les événements (y compris récurrents)
 /// Cette fonction parse manuellement les composants VEVENT
 fn parse_ics_events(ics_content: &str) -> Vec<(DateTime<Utc>, DateTime<Utc>, String)> {
-    let mut events = Vec::new();
+    let mut all_events = Vec::new();
     let mut lines = ics_content.lines();
     
     while let Some(line) = lines.next() {
@@ -551,8 +771,10 @@ fn parse_ics_events(ics_content: &str) -> Vec<(DateTime<Utc>, DateTime<Utc>, Str
         if trimmed == "BEGIN:VEVENT" {
             let mut start_dt: Option<DateTime<Utc>> = None;
             let mut end_dt: Option<DateTime<Utc>> = None;
-            let mut duration: Option<chrono::Duration> = None;
             let mut summary = "Unknown event".to_string();
+            let mut rrule: Option<String> = None;
+            let mut until: Option<DateTime<Utc>> = None;
+            let mut count: Option<i32> = None;
             
             // Lire les propriétés de l'événement
             while let Some(line) = lines.next() {
@@ -569,12 +791,13 @@ fn parse_ics_events(ics_content: &str) -> Vec<(DateTime<Utc>, DateTime<Utc>, Str
                     // Extraire le nom de la propriété (avant le premier ; ou :)
                     let prop_name_end = line_trimmed.find(';').unwrap_or(colon_idx);
                     let prop_name = &line_trimmed[..prop_name_end].to_uppercase();
+                    let value = &line_trimmed[colon_idx+1..];
                     
                     match prop_name.as_str() {
                         "DTSTART" => {
                             if let Some(dt) = parse_ics_datetime(line_trimmed) {
                                 start_dt = Some(dt);
-                            } else if let Some(date) = parse_ics_date(&line_trimmed[colon_idx+1..]) {
+                            } else if let Some(date) = parse_ics_date(value) {
                                 // Date seule = toute la journée
                                 start_dt = Some(Utc.from_utc_datetime(&date.and_time(NaiveTime::from_hms_opt(0, 0, 0).unwrap())));
                             }
@@ -582,64 +805,51 @@ fn parse_ics_events(ics_content: &str) -> Vec<(DateTime<Utc>, DateTime<Utc>, Str
                         "DTEND" => {
                             if let Some(dt) = parse_ics_datetime(line_trimmed) {
                                 end_dt = Some(dt);
-                            } else if let Some(date) = parse_ics_date(&line_trimmed[colon_idx+1..]) {
+                            } else if let Some(date) = parse_ics_date(value) {
                                 // Date seule = toute la journée (fin = lendemain à minuit)
                                 end_dt = Some(Utc.from_utc_datetime(&date.succ_opt().unwrap_or(date).and_time(NaiveTime::from_hms_opt(0, 0, 0).unwrap())));
                             }
                         }
-                        "DURATION" => {
-                            duration = parse_duration(&line_trimmed[colon_idx+1..]);
-                        }
                         "SUMMARY" => {
-                            summary = line_trimmed[colon_idx+1..].to_string();
+                            summary = value.to_string();
+                        }
+                        "RRULE" => {
+                            rrule = Some(value.to_string());
+                        }
+                        "UNTIL" => {
+                            if let Some(dt) = parse_ics_datetime(&format!("UNTIL:{}", value)) {
+                                until = Some(dt);
+                            }
+                        }
+                        "COUNT" => {
+                            count = value.parse().ok();
                         }
                         _ => {}
                     }
                 }
             }
             
-            // Calculer end_dt si durée est présente
-            if start_dt.is_some() && duration.is_some() && end_dt.is_none() {
-                end_dt = Some(start_dt.unwrap() + duration.unwrap());
-            }
-            
             // Ajouter l'événement si on a les dates
             if let (Some(start), Some(end)) = (start_dt, end_dt) {
-                events.push((start, end, summary.clone()));
+                let raw_event = RawIcsEvent {
+                    start,
+                    end,
+                    summary,
+                    rrule,
+                    until,
+                    count,
+                };
+                
+                // Expander les événements récurrents
+                // Utiliser une date loin dans le futur pour l'expansion (5 ans)
+                let far_future = Utc::now() + chrono::Duration::days(365 * 5);
+                let mut event_occurrences = expand_rrule_events(&raw_event, far_future);
+                all_events.append(&mut event_occurrences);
             }
         }
     }
     
-    events
-}
-
-/// Parse une durée au format ISO 8601 (ex: PT30M, PT1H30M)
-fn parse_duration(dur_str: &str) -> Option<chrono::Duration> {
-    if !dur_str.starts_with("PT") {
-        return None;
-    }
-    
-    let dur = &dur_str[2..];
-    let mut seconds = 0;
-    let mut current_num: Option<i64> = None;
-    
-    for c in dur.chars() {
-        if c.is_ascii_digit() {
-            current_num = Some(current_num.unwrap_or(0) * 10 + c.to_digit(10)? as i64);
-        } else {
-            if let Some(num) = current_num {
-                match c {
-                    'H' => seconds += num * 3600,
-                    'M' => seconds += num * 60,
-                    'S' => seconds += num,
-                    _ => {}
-                }
-                current_num = None;
-            }
-        }
-    }
-    
-    Some(chrono::Duration::seconds(seconds))
+    all_events
 }
 
 /// Vérifie si un slot est en conflit avec un événement calendrier
@@ -724,13 +934,14 @@ struct SlotBookingDetails {
 }
 
 /// Représente un événement du calendrier
+/// Les dates start et end sont en UTC (format ISO 8601: YYYY-MM-DDTHH:MM:SSZ)
 #[derive(Debug, Serialize)]
 struct CalendarEvent {
     /// Titre/summary de l'événement
     summary: String,
-    /// Date/heure de début (format ISO 8601)
+    /// Date/heure de début en UTC (format ISO 8601: YYYY-MM-DDTHH:MM:SSZ)
     start: String,
-    /// Date/heure de fin (format ISO 8601)
+    /// Date/heure de fin en UTC (format ISO 8601: YYYY-MM-DDTHH:MM:SSZ)
     end: String,
 }
 
@@ -1006,9 +1217,12 @@ async fn index() -> impl Responder {
 }
 
 /// Récupère les événements du calendrier pour la semaine en cours
+/// Utilise le protocole CalDAV (REPORT request) pour récupérer les événements
+/// puis parse le contenu iCalendar (ICS) retourné dans la réponse
 #[get("/api/calendar/events")]
 async fn get_calendar_events() -> Result<impl Responder> {
-    // Récupérer les événements CalDAV
+    // Récupérer les événements via le protocole CalDAV
+    // La réponse contient du iCalendar (ICS) dans les balises <cal:calendar-data>
     let ics_content = match fetch_caldav_events().await {
         Some(content) => content,
         None => {
@@ -1019,6 +1233,7 @@ async fn get_calendar_events() -> Result<impl Responder> {
         }
     };
     
+    // Parser les événements ICS (avec gestion des TZID comme Europe/Zurich)
     let events = parse_ics_events(&ics_content);
     
     // Obtenir la date de début de la semaine (lundi)
