@@ -65,11 +65,10 @@ VISIO_BASE_URL=https://meet.kmeet.infomaniak.com/sav
 
 ```json
 {
-  "id": "20250120-0930",
+  "id": "202501200930",
   "date": "2025-01-20",
   "start_time": "09:30",
   "end_time": "10:00",
-  "visio_link": "https://meet.kmeet.infomaniak.com/sav/2025-01-20/0930",
   "booked": false
 }
 ```
@@ -139,14 +138,26 @@ Réserve un slot spécifique.
 
 **Exemple de requête**
 ```
-POST /api/slots/20250122-0930/book
+POST /api/slots/202501220930/book
+```
+
+**Requête avec nom client**
+```
+POST /api/slots/202501220930/book
+Content-Type: application/json
+
+{
+  "customer_name": "John Doe",
+  "customer_email": "john@example.com"
+}
 ```
 
 **Réponse (succès)**
 ```json
 {
   "status": "booked",
-  "slot_id": "20250122-0930",
+  "slot_id": "202501220930",
+  "kmeet_url": "https://meet.infomaniak.com/room/abc123",
   "message": "Slot successfully booked"
 }
 ```

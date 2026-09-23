@@ -35,7 +35,8 @@ struct Slot {
     start_time: String,
     /// Heure de fin (format HH:MM)
     end_time: String,
-    /// Lien visio pour ce slot
+    /// Lien visio pour ce slot (non inclus dans le JSON)
+    #[serde(skip_serializing)]
     visio_link: String,
     /// Statut de réservation
     booked: bool,
@@ -45,7 +46,7 @@ impl Slot {
     /// Crée un nouveau slot
     fn new(date: NaiveDate, start_time: NaiveTime, visio_link: String) -> Self {
         let end_time = start_time + Duration::minutes(30);
-        let id = format!("{}-{}", date.format("%Y%m%d"), start_time.format("%H%M"));
+        let id = format!("{}{}", date.format("%Y%m%d"), start_time.format("%H%M"));
         
         Slot {
             id,
@@ -781,15 +782,21 @@ async fn book_slot(
     let slot_id = slot_id.into_inner();
     let slot_id_clone = slot_id.clone();
     
-    // Extraire la date et l'heure du slot depuis l'ID (format: YYYYMMDD-HHMM)
+    // Extraire la date et l'heure du slot depuis l'ID (format: YYYYMMDDHHMM)
+    if slot_id.len() != 12 {
+        return Ok(HttpResponse::BadRequest().json(json!({
+            "error": "Invalid slot ID format. Expected YYYYMMDDHHMM (12 digits)"
+        })));
+    }
+    
     let date_part = &slot_id[..8];
-    let time_part = &slot_id[9..];
+    let time_part = &slot_id[8..12];
     
     let slot_date = match NaiveDate::parse_from_str(date_part, "%Y%m%d") {
         Ok(date) => date,
         Err(_) => {
             return Ok(HttpResponse::BadRequest().json(json!({
-                "error": "Invalid slot ID format. Expected YYYYMMDD-HHMM"
+                "error": "Invalid date format in slot ID. Expected YYYYMMDDHHMM"
             })));
         }
     };
@@ -798,7 +805,7 @@ async fn book_slot(
         Ok(time) => time,
         Err(_) => {
             return Ok(HttpResponse::BadRequest().json(json!({
-                "error": "Invalid time format in slot ID"
+                "error": "Invalid time format in slot ID. Expected YYYYMMDDHHMM"
             })));
         }
     };
@@ -931,7 +938,7 @@ mod tests {
         assert_eq!(slot.start_time, "09:30");
         assert_eq!(slot.end_time, "10:00");
         assert_eq!(slot.visio_link, "https://meet.kmeet.test/abc");
-        assert_eq!(slot.id, "20250120-0930");
+        assert_eq!(slot.id, "202501200930");
         assert_eq!(slot.booked, false);
     }
 
@@ -999,25 +1006,25 @@ mod tests {
     fn test_app_state_book_slot() {
         let state = AppState::new();
         
-        assert!(!state.is_booked("20250120-0930"));
+        assert!(!state.is_booked("202501200930"));
         let kmeet_url = Some("https://meet.kmeet.test/room123".to_string());
-        state.book_slot("20250120-0930".to_string(), kmeet_url.clone());
-        assert!(state.is_booked("20250120-0930"));
-        assert_eq!(state.get_kmeet_url("20250120-0930"), kmeet_url);
+        state.book_slot("202501200930".to_string(), kmeet_url.clone());
+        assert!(state.is_booked("202501200930"));
+        assert_eq!(state.get_kmeet_url("202501200930"), kmeet_url);
     }
 
     #[tokio::test]
     async fn test_filter_available_slots() {
         let state = AppState::new();
         
-        state.book_slot("20250120-0930".to_string(), None);
+        state.book_slot("202501200930".to_string(), None);
         
         let date = NaiveDate::from_ymd_opt(2025, 1, 20).unwrap();
         let all_slots = generate_slots_for_date(date, "https://meet.kmeet.test");
         let available = filter_available_slots(all_slots, &web::Data::new(state)).await;
         
         assert_eq!(available.len(), 8);
-        assert!(!available.iter().any(|s| s.id == "20250120-0930"));
+        assert!(!available.iter().any(|s| s.id == "202501200930"));
     }
 
     #[test]
@@ -1025,15 +1032,15 @@ mod tests {
         let state = AppState::new();
         
         // Slot non réservé
-        assert!(!state.is_booked("20250120-0930"));
-        assert_eq!(state.get_kmeet_url("20250120-0930"), None);
+        assert!(!state.is_booked("202501200930"));
+        assert_eq!(state.get_kmeet_url("202501200930"), None);
         
         // Réserver le slot avec une URL KMeet
         let kmeet_url = Some("https://meet.kmeet.test/room123".to_string());
-        state.book_slot("20250120-0930".to_string(), kmeet_url.clone());
+        state.book_slot("202501200930".to_string(), kmeet_url.clone());
         
         // Vérifier que le slot est réservé
-        assert!(state.is_booked("20250120-0930"));
-        assert_eq!(state.get_kmeet_url("20250120-0930"), kmeet_url);
+        assert!(state.is_booked("202501200930"));
+        assert_eq!(state.get_kmeet_url("202501200930"), kmeet_url);
     }
 }
