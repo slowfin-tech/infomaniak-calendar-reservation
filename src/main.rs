@@ -368,52 +368,45 @@ async fn create_kmeet_room(
 // ============================================================================
 
 /// Récupère les variables d'environnement CalDAV
-/// Extrait le username du login (avant le @ pour Infomaniak)
+/// CALDAV_LOGIN est déjà nettoyé (sans le domaine)
 fn get_caldav_config() -> Option<(String, String, String)> {
     let url = std::env::var("CALDAV_URL").ok()?;
     let login = std::env::var("CALDAV_LOGIN").ok()?;
     let password = std::env::var("CALDAV_PASSWORD").ok()?;
     
-    // Pour Infomaniak, le login est au format user@sync.infomaniak.com
-    // mais l'authentification CalDAV utilise juste la partie user
-    let username = login.split('@').next().unwrap_or(&login).to_string();
-    
-    Some((url, username, password))
+    Some((url, login, password))
 }
 
 /// Construit l'URL du calendrier CalDAV à partir des informations disponibles
-/// Infomaniak: https://sync.infomaniak.com/calendars/{user_id}/{calendar_id}/
+/// Construit l'URL du calendrier CalDAV à partir des informations disponibles
+/// Priorité: CALDAV_CALENDAR_URI > KCALENDAR_URL > default
 fn build_caldav_calendar_url() -> Option<String> {
-    // Extraire user_id et calendar_id de CALDAV_LOGIN
-    // CALDAV_LOGIN est au format: ND04237@sync.infomaniak.com ou user@sync.infomaniak.com
-    let login = std::env::var("CALDAV_LOGIN").ok()?;
+    // Essayer CALDAV_CALENDAR_URI en premier (format: /calendars/ND04237/f28b6a18-5cdd-410b-9cc4-ae95932ff536/)
+    if let Ok(calendar_uri) = std::env::var("CALDAV_CALENDAR_URI") {
+        let caldav_url = std::env::var("CALDAV_URL").unwrap_or_else(|_| "https://sync.infomaniak.com/".to_string());
+        let caldav_base = caldav_url.trim_end_matches('/');
+        let uri_clean = calendar_uri.trim_start_matches('/');
+        return Some(format!("{}/{}", caldav_base, uri_clean));
+    }
     
-    // Extraire le user_id (avant le @)
-    let user_id = login.split('@').next()?;
-    
-    // Pour Infomaniak, le calendar_id peut être dans KCALENDAR_URL ou on utilise un ID par défaut
-    // Essayer de récupérer depuis KCALENDAR_URL si disponible
+    // Sinon, essayer depuis KCALENDAR_URL
     if let Ok(kcalendar_url) = std::env::var("KCALENDAR_URL") {
         let parts: Vec<&str> = kcalendar_url.split("/calendars/").collect();
         if parts.len() >= 2 {
             let calendar_path = parts[1].split('?').next().unwrap_or("");
-            // calendar_path est au format user_id/calendar_id
-            let path_parts: Vec<&str> = calendar_path.split('/').collect();
-            if path_parts.len() >= 2 {
-                let caldav_url = std::env::var("CALDAV_URL").unwrap_or_else(|_| "https://sync.infomaniak.com/".to_string());
-                let caldav_base = caldav_url.trim_end_matches('/');
-                return Some(format!("{}/calendars/{}", caldav_base, calendar_path));
-            }
+            let caldav_url = std::env::var("CALDAV_URL").unwrap_or_else(|_| "https://sync.infomaniak.com/".to_string());
+            let caldav_base = caldav_url.trim_end_matches('/');
+            return Some(format!("{}/calendars/{}", caldav_base, calendar_path));
         }
     }
     
-    // Sinon, utiliser une URL par défaut avec le user_id
+    // Sinon, utiliser une URL par défaut avec CALDAV_LOGIN
+    let login = std::env::var("CALDAV_LOGIN").ok()?;
     let caldav_url = std::env::var("CALDAV_URL").unwrap_or_else(|_| "https://sync.infomaniak.com/".to_string());
     let caldav_base = caldav_url.trim_end_matches('/');
     
     // Pour Infomaniak, chaque utilisateur a un calendrier par défaut
-    // L'URL est typiquement: https://sync.infomaniak.com/calendars/{user_id}/default/
-    Some(format!("{}/calendars/{}/default/", caldav_base, user_id))
+    Some(format!("{}/calendars/{}/default/", caldav_base, login))
 }
 
 /// Récupère les événements CalDAV en utilisant le protocole REPORT
