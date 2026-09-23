@@ -458,6 +458,11 @@ async fn fetch_caldav_events() -> Option<String> {
         }
     };
     
+    // Log pour debug: afficher la réponse CalDAV complète
+    eprintln!("=== CalDAV Response (raw XML) ===");
+    eprintln!("{}", xml_response);
+    eprintln!("=== End of CalDAV Response ===");
+    
     // Extraire le contenu ICS de la réponse XML
     // Chercher entre <C:calendar-data>, <cal:calendar-data>, etc.
     // La réponse peut contenir plusieurs calendar-data avec différents namespaces
@@ -489,6 +494,13 @@ async fn fetch_caldav_events() -> Option<String> {
         eprintln!("No calendar-data found in CalDAV response");
         return None;
     }
+    
+    // Log pour debug: afficher le contenu ICS extrait
+    eprintln!("=== Extracted ICS Content ===");
+    for (i, part) in ics_parts.iter().enumerate() {
+        eprintln!("ICS Part {}: {}", i + 1, part);
+    }
+    eprintln!("=== End of ICS Content ===");
     
     // Concatenner tous les contenus ICS
     Some(ics_parts.join(""))
@@ -1236,6 +1248,13 @@ async fn get_calendar_events() -> Result<impl Responder> {
     // Parser les événements ICS (avec gestion des TZID comme Europe/Zurich)
     let events = parse_ics_events(&ics_content);
     
+    // Log pour debug: afficher les événements parsés
+    eprintln!("=== Parsed Events ({} total) ===", events.len());
+    for (i, (start, end, summary)) in events.iter().enumerate() {
+        eprintln!("Event {}: {} -> {} ({})", i + 1, start, end, summary);
+    }
+    eprintln!("=== End of Parsed Events ===");
+    
     // Obtenir la date de début de la semaine (lundi)
     let today = Utc::now();
     let today_date = today.date_naive();
@@ -1275,6 +1294,13 @@ async fn get_calendar_events() -> Result<impl Responder> {
             }
         })
         .collect();
+    
+    // Log pour debug: afficher les événements de la semaine
+    eprintln!("=== Week Events ({} filtered) ===", week_events.len());
+    for (i, event) in week_events.iter().enumerate() {
+        eprintln!("Week Event {}: {} -> {} ({})", i + 1, event.start, event.end, event.summary);
+    }
+    eprintln!("=== End of Week Events ===");
     
     Ok(HttpResponse::Ok().json(json!({
         "week_start": monday.format("%Y-%m-%d").to_string(),
