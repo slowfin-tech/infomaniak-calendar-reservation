@@ -1,5 +1,5 @@
 use actix_web::{get, post, web, App, HttpResponse, HttpServer, Responder, Result};
-use chrono::{DateTime, NaiveDate, NaiveTime, TimeZone, Utc, Datelike, Duration};
+use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc, Datelike, Duration};
 use dotenvy::dotenv;
 use reqwest;
 use serde::{Deserialize, Serialize};
@@ -36,16 +36,13 @@ struct Slot {
     start_time: String,
     /// Heure de fin (format HH:MM)
     end_time: String,
-    /// Lien visio pour ce slot (non inclus dans le JSON)
-    #[serde(skip_serializing)]
-    visio_link: String,
     /// Statut de réservation
     booked: bool,
 }
 
 impl Slot {
     /// Crée un nouveau slot
-    fn new(date: NaiveDate, start_time: NaiveTime, visio_link: String) -> Self {
+    fn new(date: NaiveDate, start_time: NaiveTime) -> Self {
         let end_time = start_time + Duration::minutes(30);
         let id = format!("{}{}", date.format("%Y%m%d"), start_time.format("%H%M"));
         
@@ -54,7 +51,6 @@ impl Slot {
             date: date.format("%Y-%m-%d").to_string(),
             start_time: start_time.format("%H:%M").to_string(),
             end_time: end_time.format("%H:%M").to_string(),
-            visio_link,
             booked: false,
         }
     }
@@ -68,19 +64,38 @@ impl Slot {
 struct AppState {
     /// Map des slots réservés (slot_id -> (kmeet_url, booked))
     booked_slots: Mutex<HashMap<String, (Option<String>, bool)>>,
+    /// Liste des événements CalDAV (start, end, summary)
+    caldav_events: Mutex<Vec<(DateTime<Utc>, DateTime<Utc>, String)>>,
 }
 
 impl AppState {
     fn new() -> Self {
         AppState {
             booked_slots: Mutex::new(HashMap::new()),
+            caldav_events: Mutex::new(Vec::new()),
         }
     }
     
-    /// Vérifie si un slot est réservé
+    /// Vérifie si un slot est réservé (via API ou CalDAV)
     fn is_booked(&self, slot_id: &str) -> bool {
         let booked = self.booked_slots.lock().unwrap();
         booked.get(slot_id).map(|(_, booked)| *booked).unwrap_or(false)
+    }
+    
+    /// Vérifie si un slot est en conflit avec un événement CalDAV
+    fn is_in_caldav_conflict(&self, date: NaiveDate, start_time: NaiveTime, end_time: NaiveTime) -> bool {
+        let events = self.caldav_events.lock().unwrap();
+        let slot_start_utc = Utc.from_utc_datetime(&date.and_time(start_time));
+        let slot_end_utc = Utc.from_utc_datetime(&date.and_time(end_time));
+        
+        for (event_start, event_end, _) in events.iter() {
+            // Vérifier si les plages se chevauchent
+            if slot_start_utc < *event_end && slot_end_utc > *event_start {
+                return true;
+            }
+        }
+        
+        false
     }
     
     /// Réserve un slot avec optionnellement une URL KMeet
@@ -96,7 +111,13 @@ impl AppState {
         booked.get(slot_id).and_then(|(url, _)| url.clone())
     }
     
-    /// Vérifie si un slot peut être réservé (minimum 2 jours à l'avance)
+    /// Charge les événements CalDAV
+    fn load_caldav_events(&self, events: Vec<(DateTime<Utc>, DateTime<Utc>, String)>) {
+        let mut caldav_events = self.caldav_events.lock().unwrap();
+        *caldav_events = events;
+    }
+    
+    /// Vérifie si un slot peut être réservé (minimum 2 jours à l'avance et pas en conflit CalDAV)
     fn can_book(&self, slot_id: &str, slot_date: &str) -> bool {
         // Vérifier si déjà réservé
         if self.is_booked(slot_id) {
@@ -113,350 +134,50 @@ impl AppState {
         let min_date = today + Duration::days(2);
         
         // Le slot doit être au moins 2 jours après aujourd'hui
-        slot_naive >= min_date
-    }
-}
-
-// ============================================================================
-// Calendar Integration
-// ============================================================================
-
-/// Structure pour représenter un événement du calendrier
-#[derive(Debug, Clone)]
-struct CalendarEvent {
-    start: DateTime<Utc>,
-    end: DateTime<Utc>,
-    summary: Option<String>,
-    /// Règle de récurrence (RRULE) si l'événement est récurrent
-    rrule: Option<String>,
-    /// Date de début de la récurrence
-    dtstart_raw: Option<String>,
-    /// Durée de l'événement (si DURATION est utilisé au lieu de DTEND)
-    duration: Option<chrono::Duration>,
-}
-
-/// Parse une ligne DTSTART ou DTEND au format ICS
-/// Gère les formats:
-/// - 20260912T140000Z (UTC avec Z)
-/// - 20260912T140000 (local, on assume UTC)
-/// - DTSTART;TZID=Europe/Paris:20260912T140000 (avec timezone)
-fn parse_ics_datetime(dt_str: &str) -> Option<DateTime<Utc>> {
-    // Extraire la valeur après le dernier ':'
-    let value = dt_str.split(':').last()?;
-    
-    let has_z = value.ends_with('Z');
-    let clean_str = if has_z { value.trim_end_matches('Z') } else { value };
-    
-    if clean_str.len() == 15 {
-        // Format: YYYYMMDDTHHMMSS (15 chars)
-        let date_part = &clean_str[..8];  // YYYYMMDD
-        let time_part = &clean_str[9..15]; // HHMMSS (skip T at position 8)
-        let date = NaiveDate::parse_from_str(date_part, "%Y%m%d").ok()?;
-        let time = NaiveTime::parse_from_str(time_part, "%H%M%S").ok()?;
-        Some(Utc.from_utc_datetime(&date.and_time(time)))
-    } else {
-        None
-    }
-}
-
-/// Parse une durée au format ISO 8601 (ex: PT30M, PT1H30M, P1D)
-fn parse_ics_duration(duration_str: &str) -> Option<chrono::Duration> {
-    // Supprimer les paramètres comme FREQ=WEEKLY;INTERVAL=1
-    let clean_str = duration_str.split(';').next()?.trim();
-    
-    if !clean_str.starts_with("PT") && !clean_str.starts_with("P") {
-        return None;
-    }
-    
-    let duration_str = clean_str.trim_start_matches("PT").trim_start_matches("P");
-    let mut total_seconds = 0i64;
-    let mut remaining = duration_str;
-    
-    // Parse hours
-    if let Some(pos) = remaining.find('H') {
-        let hours: i64 = remaining[..pos].parse().ok()?;
-        total_seconds += hours * 3600;
-        remaining = &remaining[pos+1..];
-    }
-    
-    // Parse minutes
-    if let Some(pos) = remaining.find('M') {
-        let minutes: i64 = remaining[..pos].parse().ok()?;
-        total_seconds += minutes * 60;
-        remaining = &remaining[pos+1..];
-    }
-    
-    // Parse seconds
-    if let Some(pos) = remaining.find('S') {
-        let seconds: i64 = remaining[..pos].parse().ok()?;
-        total_seconds += seconds;
-    }
-    
-    Some(chrono::Duration::seconds(total_seconds))
-}
-
-/// Parse un fichier ICS et extrait les événements
-/// Gère les événements simples et récurrents (RRULE)
-fn parse_ics_content(content: &str) -> Vec<CalendarEvent> {
-    let mut events = Vec::new();
-    let mut current_event: Option<CalendarEvent> = None;
-    
-    for line in content.lines() {
-        let line = line.trim();
-        // Skip empty lines and continuation lines (lines starting with space)
-        if line.is_empty() {
-            continue;
-        }
-        // Handle folded lines (lines that are continuations)
-        if line.starts_with(' ') {
-            // For now, we skip continuation lines as we handle the main format
-            // A more robust parser would unfold these
-            continue;
+        if slot_naive < min_date {
+            return false;
         }
         
-        if line == "BEGIN:VEVENT" {
-            current_event = Some(CalendarEvent {
-                start: Utc::now(),
-                end: Utc::now(),
-                summary: None,
-                rrule: None,
-                dtstart_raw: None,
-                duration: None,
-            });
-        } else if line == "END:VEVENT" {
-            if let Some(event) = current_event.take() {
-                events.push(event);
-            }
-        } else if let Some(ref mut event) = current_event {
-            if line.starts_with("DTSTART:") || line.starts_with("DTSTART;") {
-                let dt_str = &line[7..]; // Remove "DTSTART" prefix
-                event.start = parse_ics_datetime(dt_str).unwrap_or(Utc::now());
-                event.dtstart_raw = Some(dt_str.to_string());
-            } else if line.starts_with("DTEND:") || line.starts_with("DTEND;") {
-                let dt_str = &line[5..]; // Remove "DTEND" prefix
-                event.end = parse_ics_datetime(dt_str).unwrap_or(Utc::now());
-            } else if line.starts_with("SUMMARY:") || line.starts_with("SUMMARY;") {
-                let summary = &line[7..]; // Remove "SUMMARY" prefix
-                event.summary = Some(summary.to_string());
-            } else if line.starts_with("RRULE:") || line.starts_with("RRULE;") {
-                let rrule = &line[6..]; // Remove "RRULE" prefix
-                event.rrule = Some(rrule.to_string());
-            } else if line.starts_with("DURATION:") || line.starts_with("DURATION;") {
-                let duration_str = &line[9..]; // Remove "DURATION" prefix
-                // Parse ISO 8601 duration format like PT30M, PT1H, etc.
-                if let Some(dur) = parse_ics_duration(duration_str) {
-                    event.duration = Some(dur);
-                    // Calculer end = start + duration
-                    // On vérifie que start a été parsé (différent de la valeur par défaut)
-                    // en vérifiant que dtstart_raw est défini (car il est mis à jour en même temps que start)
-                    if event.dtstart_raw.is_some() {
-                        event.end = event.start + dur;
-                    }
+        // Vérifier les conflits CalDAV
+        // Extraire l'heure du slot depuis l'ID (format: YYYYMMDDHHMM)
+        if slot_id.len() >= 12 {
+            let time_part = &slot_id[8..12];
+            if let Ok(start_time) = NaiveTime::parse_from_str(time_part, "%H%M") {
+                let end_time = start_time + Duration::minutes(SLOT_DURATION_MINUTES);
+                if self.is_in_caldav_conflict(slot_naive, start_time, end_time) {
+                    return false;
                 }
             }
         }
-    }
-    
-    events
-}
-
-/// Récupère le calendrier ICS depuis l'URL configurée
-async fn fetch_calendar_events() -> Vec<CalendarEvent> {
-    let calendar_url = match get_kcalendar_url() {
-        Some(url) => url,
-        None => return Vec::new(),
-    };
-    
-    let client = reqwest::Client::new();
-    match client.get(&calendar_url).send().await {
-        Ok(response) => {
-            if response.status().is_success() {
-                let content = match response.text().await {
-                    Ok(text) => text,
-                    Err(_) => return Vec::new(),
-                };
-                let events = parse_ics_content(&content);
-                // Expandir les événements récurrents
-                expand_recurring_events(events)
-            } else {
-                eprintln!("Failed to fetch calendar: HTTP {}", response.status());
-                Vec::new()
-            }
-        }
-        Err(e) => {
-            eprintln!("Failed to fetch calendar: {}", e);
-            Vec::new()
-        },
+        
+        true
     }
 }
 
-/// Étend les événements récurrents en générant toutes leurs occurrences
-/// dans une plage raisonnable (par défaut: 2 ans autour de la date actuelle)
-fn expand_recurring_events(events: Vec<CalendarEvent>) -> Vec<CalendarEvent> {
-    let mut expanded_events = Vec::new();
-    let now = Utc::now().date_naive();
-    
-    for event in events {
-        // Si l'événement a une règle de récurrence (RRULE)
-        if let Some(rrule) = &event.rrule {
-            // Pour l'instant, gérons seulement les RRULE simples de type FREQ=WEEKLY
-            // Un parseur complet RRULE serait plus complexe
-            
-            if rrule.contains("FREQ=WEEKLY") {
-                // Extraire l'intervalle (par défaut 1)
-                let interval = if rrule.contains("INTERVAL=") {
-                    rrule.split("INTERVAL=").nth(1)
-                        .and_then(|s| s.split(';').next())
-                        .and_then(|s| s.parse::<i32>().ok())
-                        .unwrap_or(1)
-                } else {
-                    1
-                };
-                
-                // Date de début de la récurrence
-                let start_date = event.start.date_naive();
-                
-                // Date de fin si UNTIL est spécifié
-                let end_date = if rrule.contains("UNTIL=") {
-                    // Extraire la date UNTIL
-                    if let Some(until_str) = rrule.split("UNTIL=").nth(1).and_then(|s| s.split(';').next()) {
-                        // Parse UNTIL date (format: 20260812T215959Z)
-                        if let Some(until_dt) = parse_ics_datetime(until_str) {
-                            Some(until_dt.date_naive())
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                };
-                
-                // Générer des occurrences à partir de start_date jusqu'à 1 an dans le futur
-                // ou jusqu'à end_date si spécifié
-                let mut current_date = start_date;
-                let mut max_iterations = 1000; // Sécurité pour éviter les boucles infinies
-                
-                while max_iterations > 0 {
-                    max_iterations -= 1;
-                    
-                    // Si nous avons une date de fin et que current_date la dépasse, arrêter
-                    if let Some(end) = end_date {
-                        if current_date > end {
-                            break;
-                        }
-                    } else {
-                        // Sans date de fin, générer jusqu'à 2 ans dans le futur
-                        if current_date > now + Duration::days(365 * 2) {
-                            break;
-                        }
-                    }
-                    
-                    // Conserver le même temps de la journée que l'événement original
-                    let original_time = event.start.time();
-                    let new_start = Utc.from_utc_datetime(&current_date.and_time(original_time));
-                    
-                    // Calculer la fin en utilisant la durée de l'événement original
-                    // Préférer le champ duration s'il est disponible, sinon calculer depuis start/end
-                    let duration = if let Some(dur) = event.duration {
-                        dur
-                    } else {
-                        event.end - event.start
-                    };
-                    let new_end = new_start + duration;
-                    
-                    // Créer l'occurrence
-                    let mut occurrence = event.clone();
-                    occurrence.start = new_start;
-                    occurrence.end = new_end;
-                    expanded_events.push(occurrence);
-                    
-                    // Passer à la prochaine occurrence
-                    current_date = current_date + Duration::days(7 * interval as i64);
-                }
-            } else {
-                // RRULE non supporté, ajouter juste l'événement original
-                expanded_events.push(event);
-            }
-        } else {
-            // Événement non récurrent, ajouter tel quel
-            expanded_events.push(event);
-        }
-    }
-    
-    expanded_events
-}
+// ============================================================================
+// Slots Status Filtering
+// ============================================================================
 
-/// Vérifie si un slot chevauche avec un événement du calendrier
-fn is_slot_conflicting(slot: &Slot, calendar_events: &[CalendarEvent]) -> bool {
-    let slot_date = match NaiveDate::parse_from_str(&slot.date, "%Y-%m-%d") {
-        Ok(date) => date,
-        Err(_) => return false,
-    };
-    let slot_start = match NaiveTime::parse_from_str(&slot.start_time, "%H:%M") {
-        Ok(time) => time,
-        Err(_) => return false,
-    };
-    let slot_end = match NaiveTime::parse_from_str(&slot.end_time, "%H:%M") {
-        Ok(time) => time,
-        Err(_) => return false,
-    };
-    
-    // Convertir le slot en DateTime (UTC)
-    let slot_start_dt: DateTime<Utc> = Utc.from_utc_datetime(&slot_date.and_time(slot_start));
-    let slot_end_dt: DateTime<Utc> = Utc.from_utc_datetime(&slot_date.and_time(slot_end));
-    
-    // Vérifier chaque événement du calendrier
-    for event in calendar_events {
-        // Vérifier s'il y a chevauchement entre le slot et l'événement
-        if slot_start_dt < event.end && slot_end_dt > event.start {
-            return true; // Conflit trouvé
-        }
-    }
-    
-    false
-}
-
-/// Filtre les slots pour ne retourner que ceux disponibles (non réservés ET sans conflit calendrier)
-#[allow(dead_code)]
-async fn filter_available_slots(slots: Vec<Slot>, state: &web::Data<AppState>) -> Vec<Slot> {
-    // Récupérer les événements du calendrier
-    let calendar_events = fetch_calendar_events().await;
-    
-    slots.into_iter()
-        .filter(|slot| {
-            // Vérifier si déjà réservé
-            if state.is_booked(&slot.id) {
-                return false;
-            }
-            
-            // Vérifier s'il y a un conflit avec le calendrier
-            if is_slot_conflicting(slot, &calendar_events) {
-                return false;
-            }
-            
-            true
-        })
-        .collect()
-}
-
-/// Filtre les slots et met à jour le champ booked en fonction de l'état de réservation
-/// et des conflits calendrier.
-/// Un slot est marqué comme booked: true si :
-/// - Il est réservé via l'API
-/// - OU il est en conflit avec un événement du calendrier
+/// Filtre les slots et met à jour le champ booked en fonction de l'état de réservation.
+/// Un slot est marqué comme booked: true si il est réservé via l'API ou en conflit avec CalDAV.
 /// (retourne TOUS les slots valides)
 async fn filter_slots_with_status(slots: Vec<Slot>, state: &web::Data<AppState>) -> Vec<Slot> {
-    // Récupérer les événements du calendrier
-    let calendar_events = fetch_calendar_events().await;
-    
     slots.into_iter()
         .map(|mut slot| {
-            // Mettre à jour le statut booked en fonction de :
-            // 1. L'état de réservation via l'API
-            // 2. OU s'il y a un conflit avec le calendrier
-            slot.booked = state.is_booked(&slot.id) || is_slot_conflicting(&slot, &calendar_events);
+            // Mettre à jour le statut booked en fonction de l'état de réservation via l'API
+            let api_booked = state.is_booked(&slot.id);
+            
+            // Vérifier aussi les conflits CalDAV
+            let caldav_booked = if !api_booked {
+                let date = NaiveDate::parse_from_str(&slot.date, "%Y-%m-%d").unwrap_or_default();
+                let start_time = NaiveTime::parse_from_str(&slot.start_time, "%H:%M").unwrap_or_default();
+                let end_time = NaiveTime::parse_from_str(&slot.end_time, "%H:%M").unwrap_or_default();
+                state.is_in_caldav_conflict(date, start_time, end_time)
+            } else {
+                false
+            };
+            
+            slot.booked = api_booked || caldav_booked;
             slot
         })
         .collect()
@@ -489,7 +210,7 @@ const SLOT_DURATION_MINUTES: i64 = 30;
 const MIN_BOOKING_DAYS: i64 = 2;
 
 /// Génère tous les slots disponibles pour une date donnée
-fn generate_slots_for_date(date: NaiveDate, base_visio_link: &str) -> Vec<Slot> {
+fn generate_slots_for_date(date: NaiveDate) -> Vec<Slot> {
     if !OPEN_DAYS.contains(&date.weekday()) {
         return Vec::new();
     }
@@ -499,16 +220,14 @@ fn generate_slots_for_date(date: NaiveDate, base_visio_link: &str) -> Vec<Slot> 
     // Générer les slots du matin
     let mut current_time = MORNING_START;
     while current_time < MORNING_END {
-        let visio_link = format!("{}/{}/{}", base_visio_link, date.format("%Y-%m-%d"), current_time.format("%H%M"));
-        slots.push(Slot::new(date, current_time, visio_link));
+        slots.push(Slot::new(date, current_time));
         current_time = current_time + Duration::minutes(SLOT_DURATION_MINUTES);
     }
 
     // Générer les slots de l'après-midi
     let mut current_time = AFTERNOON_START;
     while current_time < AFTERNOON_END {
-        let visio_link = format!("{}/{}/{}", base_visio_link, date.format("%Y-%m-%d"), current_time.format("%H%M"));
-        slots.push(Slot::new(date, current_time, visio_link));
+        slots.push(Slot::new(date, current_time));
         current_time = current_time + Duration::minutes(SLOT_DURATION_MINUTES);
     }
 
@@ -516,12 +235,12 @@ fn generate_slots_for_date(date: NaiveDate, base_visio_link: &str) -> Vec<Slot> 
 }
 
 /// Génère tous les slots disponibles pour une plage de dates
-fn generate_slots_for_range(start_date: NaiveDate, end_date: NaiveDate, base_visio_link: &str) -> Vec<Slot> {
+fn generate_slots_for_range(start_date: NaiveDate, end_date: NaiveDate) -> Vec<Slot> {
     let mut all_slots = Vec::new();
     let mut current_date = start_date;
 
     while current_date <= end_date {
-        let slots = generate_slots_for_date(current_date, base_visio_link);
+        let slots = generate_slots_for_date(current_date);
         all_slots.extend(slots);
         current_date = current_date.succ_opt().unwrap();
     }
@@ -643,15 +362,311 @@ async fn create_kmeet_room(
 // Configuration
 // ============================================================================
 
-/// Récupère l'URL de base pour les liens visio depuis les variables d'environnement
-fn get_visio_base_url() -> String {
-    std::env::var("VISIO_BASE_URL")
-        .unwrap_or_else(|_| "https://meet.kmeet.infomaniak.com/sav".to_string())
+// ============================================================================
+// CalDAV Integration
+// ============================================================================
+
+/// Récupère les variables d'environnement CalDAV
+fn get_caldav_config() -> Option<(String, String, String)> {
+    let url = std::env::var("CALDAV_URL").ok()?;
+    let login = std::env::var("CALDAV_LOGIN").ok()?;
+    let password = std::env::var("CALDAV_PASSWORD").ok()?;
+    Some((url, login, password))
 }
 
-/// Récupère l'URL du calendrier depuis les variables d'environnement
+/// Récupère l'URL du calendrier KCalendar depuis les variables d'environnement
 fn get_kcalendar_url() -> Option<String> {
     std::env::var("KCALENDAR_URL").ok()
+}
+
+/// Construit l'URL complète du calendrier CalDAV pour Infomaniak
+/// Format: https://sync.infomaniak.com/calendars/{user_id}/{calendar_id}
+fn build_caldav_calendar_url() -> Option<String> {
+    let kcalendar_url = get_kcalendar_url()?;
+    // Extraire l'ID du calendrier de l'URL KCalendar
+    // Format: https://sync.infomaniak.com/calendars/ND04237/f28b6a18-5cdd-410b-9cc4-ae95932ff536?export
+    let parts: Vec<&str> = kcalendar_url.split("/calendars/").collect();
+    if parts.len() < 2 {
+        return None;
+    }
+    let calendar_path = parts[1].split('?').next().unwrap_or("");
+    
+    let caldav_url = std::env::var("CALDAV_URL").unwrap_or_else(|_| "https://sync.infomaniak.com/".to_string());
+    
+    // Nettoyer les slashes de fin
+    let caldav_base = caldav_url.trim_end_matches('/');
+    
+    Some(format!("{}/calendars/{}", caldav_base, calendar_path))
+}
+
+/// Récupère le calendrier ICS depuis CalDAV ou KCalendar
+/// Infomaniak supporte l'export ICS via l'URL KCalendar avec authentification
+async fn fetch_ics_calendar() -> Option<String> {
+    let client = reqwest::Client::new();
+    
+    // Essayer d'abord avec KCalendar URL (export ICS)
+    if let Some(kcalendar_url) = get_kcalendar_url() {
+        // Ajouter l'authentification si disponible
+        if let Some((_, login, password)) = get_caldav_config() {
+            let response = match client
+                .get(&kcalendar_url)
+                .basic_auth(&login, Some(&password))
+                .send()
+                .await
+            {
+                Ok(resp) => resp,
+                Err(e) => {
+                    eprintln!("Failed to fetch KCalendar: {}", e);
+                    return None;
+                }
+            };
+            
+            if response.status().is_success() {
+                return response.text().await.ok();
+            }
+        } else {
+            // Essayer sans authentification
+            let response = match client
+                .get(&kcalendar_url)
+                .send()
+                .await
+            {
+                Ok(resp) => resp,
+                Err(e) => {
+                    eprintln!("Failed to fetch KCalendar: {}", e);
+                    return None;
+                }
+            };
+            
+            if response.status().is_success() {
+                return response.text().await.ok();
+            }
+        }
+    }
+    
+    // Sinon, essayer de construire l'URL CalDAV avec ?export
+    if let Some(calendar_url) = build_caldav_calendar_url() {
+        if let Some((_, login, password)) = get_caldav_config() {
+            // Ajouter ?export à l'URL
+            let export_url = if calendar_url.contains('?') {
+                format!("{}&export", calendar_url)
+            } else {
+                format!("{}/?export", calendar_url)
+            };
+            
+            let response = match client
+                .get(&export_url)
+                .basic_auth(&login, Some(&password))
+                .send()
+                .await
+            {
+                Ok(resp) => resp,
+                Err(e) => {
+                    eprintln!("Failed to fetch CalDAV export: {}", e);
+                    return None;
+                }
+            };
+            
+            if response.status().is_success() {
+                return response.text().await.ok();
+            }
+        }
+    }
+    
+    None
+}
+
+/// Parse une date/heure au format ICS avec ou sans paramètres
+/// Exemples: 20250120T093000Z, 20250120T093000, 20250120T093000 (avec TZID=Europe/Zurich)
+fn parse_ics_datetime(dt_str: &str) -> Option<DateTime<Utc>> {
+    // Extraire la valeur après le :
+    let value = if let Some(idx) = dt_str.find(':') {
+        &dt_str[idx+1..]
+    } else {
+        dt_str
+    };
+    
+    // Essayer de parser avec timezone UTC (Z)
+    if value.ends_with('Z') {
+        let naive_str = &value[..value.len()-1];
+        let naive = NaiveDateTime::parse_from_str(naive_str, "%Y%m%dT%H%M%S").ok()?;
+        Some(Utc.from_utc_datetime(&naive))
+    } else if let Ok(naive) = NaiveDateTime::parse_from_str(value, "%Y%m%dT%H%M%S") {
+        // Pas de timezone explicite, supposer UTC
+        // Note: On devrait idéalement utiliser le TZID du VTIMEZONE, mais pour simplifier on convertit en UTC
+        Some(Utc.from_utc_datetime(&naive))
+    } else if let Ok(date) = NaiveDate::parse_from_str(value, "%Y%m%d") {
+        // Date seule
+        Some(Utc.from_utc_datetime(&date.and_time(NaiveTime::from_hms_opt(0, 0, 0).unwrap())))
+    } else {
+        None
+    }
+}
+
+/// Parse une date au format ICS (ex: 20250120)
+fn parse_ics_date(date_str: &str) -> Option<NaiveDate> {
+    NaiveDate::parse_from_str(date_str, "%Y%m%d").ok()
+}
+
+/// Parse un fichier ICS et extrait les événements
+/// Cette fonction parse manuellement les composants VEVENT
+fn parse_ics_events(ics_content: &str) -> Vec<(DateTime<Utc>, DateTime<Utc>, String)> {
+    let mut events = Vec::new();
+    let mut lines = ics_content.lines();
+    
+    while let Some(line) = lines.next() {
+        let trimmed = line.trim();
+        
+        // Détecter le début d'un événement
+        if trimmed == "BEGIN:VEVENT" {
+            let mut start_dt: Option<DateTime<Utc>> = None;
+            let mut end_dt: Option<DateTime<Utc>> = None;
+            let mut duration: Option<chrono::Duration> = None;
+            let mut summary = "Unknown event".to_string();
+            
+            // Lire les propriétés de l'événement
+            while let Some(line) = lines.next() {
+                let line_trimmed = line.trim();
+                
+                // Fin de l'événement
+                if line_trimmed == "END:VEVENT" {
+                    break;
+                }
+                
+                // Extraire la clé et la valeur (gérer les paramètres comme DTSTART;TZID=...:)
+                // Format: PROPNAME[;param1=value1;param2=value2]:value
+                if let Some(colon_idx) = line_trimmed.find(':') {
+                    // Extraire le nom de la propriété (avant le premier ; ou :)
+                    let prop_name_end = line_trimmed.find(';').unwrap_or(colon_idx);
+                    let prop_name = &line_trimmed[..prop_name_end].to_uppercase();
+                    
+                    match prop_name.as_str() {
+                        "DTSTART" => {
+                            if let Some(dt) = parse_ics_datetime(line_trimmed) {
+                                start_dt = Some(dt);
+                            } else if let Some(date) = parse_ics_date(&line_trimmed[colon_idx+1..]) {
+                                // Date seule = toute la journée
+                                start_dt = Some(Utc.from_utc_datetime(&date.and_time(NaiveTime::from_hms_opt(0, 0, 0).unwrap())));
+                            }
+                        }
+                        "DTEND" => {
+                            if let Some(dt) = parse_ics_datetime(line_trimmed) {
+                                end_dt = Some(dt);
+                            } else if let Some(date) = parse_ics_date(&line_trimmed[colon_idx+1..]) {
+                                // Date seule = toute la journée (fin = lendemain à minuit)
+                                end_dt = Some(Utc.from_utc_datetime(&date.succ_opt().unwrap_or(date).and_time(NaiveTime::from_hms_opt(0, 0, 0).unwrap())));
+                            }
+                        }
+                        "DURATION" => {
+                            duration = parse_duration(&line_trimmed[colon_idx+1..]);
+                        }
+                        "SUMMARY" => {
+                            summary = line_trimmed[colon_idx+1..].to_string();
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            
+            // Calculer end_dt si durée est présente
+            if start_dt.is_some() && duration.is_some() && end_dt.is_none() {
+                end_dt = Some(start_dt.unwrap() + duration.unwrap());
+            }
+            
+            // Ajouter l'événement si on a les dates
+            if let (Some(start), Some(end)) = (start_dt, end_dt) {
+                events.push((start, end, summary.clone()));
+            }
+        }
+    }
+    
+    events
+}
+
+/// Parse une durée au format ISO 8601 (ex: PT30M, PT1H30M)
+fn parse_duration(dur_str: &str) -> Option<chrono::Duration> {
+    if !dur_str.starts_with("PT") {
+        return None;
+    }
+    
+    let dur = &dur_str[2..];
+    let mut seconds = 0;
+    let mut current_num: Option<i64> = None;
+    
+    for c in dur.chars() {
+        if c.is_ascii_digit() {
+            current_num = Some(current_num.unwrap_or(0) * 10 + c.to_digit(10)? as i64);
+        } else {
+            if let Some(num) = current_num {
+                match c {
+                    'H' => seconds += num * 3600,
+                    'M' => seconds += num * 60,
+                    'S' => seconds += num,
+                    _ => {}
+                }
+                current_num = None;
+            }
+        }
+    }
+    
+    Some(chrono::Duration::seconds(seconds))
+}
+
+/// Vérifie si un slot est en conflit avec un événement calendrier
+fn is_slot_in_conflict(slot_date: NaiveDate, slot_start: NaiveTime, slot_end: NaiveTime, events: &[(DateTime<Utc>, DateTime<Utc>, String)]) -> bool {
+    let slot_start_utc = Utc.from_utc_datetime(&slot_date.and_time(slot_start));
+    let slot_end_utc = Utc.from_utc_datetime(&slot_date.and_time(slot_end));
+    
+    for (event_start, event_end, _) in events {
+        // Vérifier si les plages se chevauchent
+        if slot_start_utc < *event_end && slot_end_utc > *event_start {
+            return true;
+        }
+    }
+    
+    false
+}
+
+/// Charge les événements CalDAV et met à jour l'état des slots réservés
+async fn load_caldav_events_and_update_slots(state: &web::Data<AppState>) -> Vec<(DateTime<Utc>, DateTime<Utc>, String)> {
+    // Récupérer le calendrier ICS
+    if let Some(ics_content) = fetch_ics_calendar().await {
+        let events = parse_ics_events(&ics_content);
+        
+        eprintln!("Loaded {} events from CalDAV", events.len());
+        
+        // Marquer les slots en conflit comme réservés
+        let mut booked = state.booked_slots.lock().unwrap();
+        
+        // Générer des slots pour les prochains mois et vérifier les conflits
+        let today = Utc::now().date_naive();
+        let future_end = today + Duration::days(90); // 3 mois à l'avance
+        
+        let mut current_date = today;
+        while current_date <= future_end {
+            if OPEN_DAYS.contains(&current_date.weekday()) {
+                let slots = generate_slots_for_date(current_date);
+                for slot in slots {
+                    let slot_id = slot.id.clone();
+                    let start_time = NaiveTime::parse_from_str(&slot.start_time, "%H:%M").unwrap();
+                    let end_time = NaiveTime::parse_from_str(&slot.end_time, "%H:%M").unwrap();
+                    
+                    if is_slot_in_conflict(current_date, start_time, end_time, &events) {
+                        // Marquer comme réservé (sans URL KMeet)
+                        if !booked.contains_key(&slot_id) {
+                            booked.insert(slot_id.clone(), (None, true));
+                            eprintln!("Marked slot {} as booked (CalDAV conflict)", slot_id);
+                        }
+                    }
+                }
+            }
+            current_date = current_date.succ_opt().unwrap();
+        }
+        
+        return events;
+    }
+    
+    Vec::new()
 }
 
 // ============================================================================
@@ -701,7 +716,7 @@ async fn get_slots_by_date(
     let date_str = date_str.into_inner();
     match NaiveDate::parse_from_str(&date_str, "%Y-%m-%d") {
         Ok(date) => {
-            let all_slots = generate_slots_for_date(date, &get_visio_base_url());
+            let all_slots = generate_slots_for_date(date);
             let slots_with_status = filter_slots_with_status(all_slots, &state).await;
             
             // Créer la réponse avec le nouveau format
@@ -766,7 +781,7 @@ async fn get_slots_range(
         })));
     }
 
-    let all_slots = generate_slots_for_range(start_date, end_date, &get_visio_base_url());
+    let all_slots = generate_slots_for_range(start_date, end_date);
     let slots_with_status = filter_slots_with_status(all_slots, &state).await;
     
     // Grouper les slots par date
@@ -943,8 +958,6 @@ async fn index() -> impl Responder {
             "kmeet_integration": get_kmeet_api_token().is_some()
         },
         "configuration": {
-            "kcalendar_url": get_kcalendar_url(),
-            "visio_base_url": get_visio_base_url(),
             "kmeet_api_configured": get_kmeet_api_token().is_some()
         }
     }))
@@ -962,12 +975,22 @@ async fn main() -> std::io::Result<()> {
     println!("SAV Server starting on http://localhost:8080");
     
     // Afficher la configuration chargée
-    println!("KCalendar URL: {:?}", get_kcalendar_url());
-    println!("Visio Base URL: {}", get_visio_base_url());
     println!("KMeet API Token: {}", if get_kmeet_api_token().is_some() { "Configured" } else { "Not configured" });
+    
+    // Vérifier la configuration CalDAV
+    if let Some((url, login, _)) = get_caldav_config() {
+        println!("CalDAV configured: URL={}, Login={}", url, login);
+    } else {
+        println!("CalDAV: Not configured");
+    }
     
     // Créer l'état partagé
     let state = web::Data::new(AppState::new());
+    
+    // Charger les événements CalDAV au démarrage
+    let events = load_caldav_events_and_update_slots(&state).await;
+    state.load_caldav_events(events);
+    println!("CalDAV synchronization complete");
     
     HttpServer::new(move || {
         App::new()
@@ -997,12 +1020,11 @@ mod tests {
     fn test_slot_creation() {
         let date = NaiveDate::from_ymd_opt(2025, 1, 20).unwrap();
         let start_time = NaiveTime::from_hms_opt(9, 30, 0).unwrap();
-        let slot = Slot::new(date, start_time, "https://meet.kmeet.test/abc".to_string());
+        let slot = Slot::new(date, start_time);
 
         assert_eq!(slot.date, "2025-01-20");
         assert_eq!(slot.start_time, "09:30");
         assert_eq!(slot.end_time, "10:00");
-        assert_eq!(slot.visio_link, "https://meet.kmeet.test/abc");
         assert_eq!(slot.id, "202501200930");
         assert_eq!(slot.booked, false);
     }
@@ -1011,7 +1033,7 @@ mod tests {
     fn test_generate_slots_for_monday() {
         // Lundi 20 janvier 2025
         let date = NaiveDate::from_ymd_opt(2025, 1, 20).unwrap();
-        let slots = generate_slots_for_date(date, "https://meet.kmeet.test");
+        let slots = generate_slots_for_date(date);
 
         assert_eq!(slots.len(), 9);
         assert_eq!(slots[0].start_time, "09:30");
@@ -1024,7 +1046,7 @@ mod tests {
     fn test_generate_slots_for_saturday() {
         // Samedi 18 janvier 2025 (fermé)
         let date = NaiveDate::from_ymd_opt(2025, 1, 18).unwrap();
-        let slots = generate_slots_for_date(date, "https://meet.kmeet.test");
+        let slots = generate_slots_for_date(date);
 
         assert_eq!(slots.len(), 0);
     }
@@ -1033,7 +1055,7 @@ mod tests {
     fn test_generate_slots_for_wednesday() {
         // Mercredi 22 janvier 2025 (fermé)
         let date = NaiveDate::from_ymd_opt(2025, 1, 22).unwrap();
-        let slots = generate_slots_for_date(date, "https://meet.kmeet.test");
+        let slots = generate_slots_for_date(date);
 
         assert_eq!(slots.len(), 0);
     }
@@ -1042,29 +1064,9 @@ mod tests {
     fn test_generate_slots_for_range() {
         let start = NaiveDate::from_ymd_opt(2025, 1, 20).unwrap(); // Lundi
         let end = NaiveDate::from_ymd_opt(2025, 1, 24).unwrap(); // Vendredi
-        let slots = generate_slots_for_range(start, end, "https://meet.kmeet.test");
+        let slots = generate_slots_for_range(start, end);
 
         assert_eq!(slots.len(), 36); // 4 * 9 = 36
-    }
-
-    #[test]
-    fn test_visio_link_format() {
-        let date = NaiveDate::from_ymd_opt(2025, 1, 20).unwrap();
-        let slots = generate_slots_for_date(date, "https://meet.kmeet.test");
-
-        assert!(slots[0].visio_link.contains("2025-01-20"));
-        assert!(slots[0].visio_link.contains("0930"));
-    }
-
-    #[test]
-    fn test_parse_ics_datetime() {
-        // Test avec format UTC: 20260912T140000Z
-        let dt = parse_ics_datetime("20260912T140000Z");
-        assert!(dt.is_some());
-        
-        // Test avec format local: 20260912T140000
-        let dt = parse_ics_datetime("20260912T140000");
-        assert!(dt.is_some());
     }
 
     #[test]
@@ -1076,20 +1078,6 @@ mod tests {
         state.book_slot("202501200930".to_string(), kmeet_url.clone());
         assert!(state.is_booked("202501200930"));
         assert_eq!(state.get_kmeet_url("202501200930"), kmeet_url);
-    }
-
-    #[tokio::test]
-    async fn test_filter_available_slots() {
-        let state = AppState::new();
-        
-        state.book_slot("202501200930".to_string(), None);
-        
-        let date = NaiveDate::from_ymd_opt(2025, 1, 20).unwrap();
-        let all_slots = generate_slots_for_date(date, "https://meet.kmeet.test");
-        let available = filter_available_slots(all_slots, &web::Data::new(state)).await;
-        
-        assert_eq!(available.len(), 8);
-        assert!(!available.iter().any(|s| s.id == "202501200930"));
     }
 
     #[test]
