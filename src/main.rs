@@ -399,15 +399,26 @@ fn build_caldav_calendar_url() -> Option<String> {
 
 /// Récupère les événements CalDAV en utilisant le protocole REPORT
 /// Utilise une requête CalDAV calendar-query pour récupérer les VEVENT
-async fn fetch_caldav_events() -> Option<String> {
+/// Optionnellement filtre par plage de dates côté serveur
+async fn fetch_caldav_events(start_date: Option<DateTime<Utc>>, end_date: Option<DateTime<Utc>>) -> Option<String> {
     let calendar_url = build_caldav_calendar_url()?;
     let (_, login, password) = get_caldav_config()?;
     
     let client = reqwest::Client::new();
     
+    // Construire la requête XML avec une plage de dates optionnelle
+    let time_range = if let (Some(start), Some(end)) = (start_date, end_date) {
+        format!("<C:time-range start=\"{}Z\" end=\"{}Z\"/>", 
+            start.format("%Y%m%dT%H%M%S"), 
+            end.format("%Y%m%dT%H%M%S"))
+    } else {
+        // Par défaut, récupérer tout depuis 1970
+        "<C:time-range start=\"19700101T000000Z\"/>".to_string()
+    };
+    
     // Requête REPORT pour récupérer les événements du calendrier
     // Utilise calendar-query pour obtenir les VEVENT
-    let report_xml = r#"<?xml version="1.0" encoding="utf-8" ?>
+    let report_xml = format!(r#"<?xml version="1.0" encoding="utf-8" ?>
 <C:calendar-query xmlns:C="urn:ietf:params:xml:ns:caldav">
     <D:prop xmlns:D="DAV:">
         <C:calendar-data/>
@@ -415,11 +426,11 @@ async fn fetch_caldav_events() -> Option<String> {
     <C:filter>
         <C:comp-filter name="VCALENDAR">
             <C:comp-filter name="VEVENT">
-                <C:time-range start="19700101T000000Z"/>
+                {}
             </C:comp-filter>
         </C:comp-filter>
     </C:filter>
-</C:calendar-query>"#;
+</C:calendar-query>"#, time_range);
     
     // Créer une méthode REPORT personnalisée
     let method = Method::from_bytes(b"REPORT").unwrap();
@@ -880,9 +891,11 @@ fn is_slot_in_conflict(slot_date: NaiveDate, slot_start: NaiveTime, slot_end: Na
 }
 
 /// Charge les événements CalDAV et met à jour l'état des slots réservés
+/// Note: Cette fonction n'est plus appelée au démarrage, mais peut être utilisée pour synchroniser manuellement
 async fn load_caldav_events_and_update_slots(state: &web::Data<AppState>) -> Vec<(DateTime<Utc>, DateTime<Utc>, String)> {
-    // Récupérer les événements via CalDAV
-    if let Some(ics_content) = fetch_caldav_events().await {
+    // Récupérer les événements via CalDAV (pour les 90 prochains jours)
+    let future_end = Utc::now() + Duration::days(90);
+    if let Some(ics_content) = fetch_caldav_events(Some(Utc::now()), Some(future_end)).await {
         let events = parse_ics_events(&ics_content);
         
         eprintln!("Loaded {} events from CalDAV", events.len());
@@ -1233,9 +1246,32 @@ async fn index() -> impl Responder {
 /// puis parse le contenu iCalendar (ICS) retourné dans la réponse
 #[get("/api/calendar/events")]
 async fn get_calendar_events() -> Result<impl Responder> {
-    // Récupérer les événements via le protocole CalDAV
-    // La réponse contient du iCalendar (ICS) dans les balises <cal:calendar-data>
-    let ics_content = match fetch_caldav_events().await {
+    // Calculer la date de début de la semaine (lundi) et fin (dimanche)
+    let today = Utc::now();
+    let today_date = today.date_naive();
+    
+    // Calculer le lundi de la semaine en cours
+    let weekday = today_date.weekday();
+    let days_to_monday = match weekday {
+        chrono::Weekday::Mon => 0,
+        chrono::Weekday::Tue => 1,
+        chrono::Weekday::Wed => 2,
+        chrono::Weekday::Thu => 3,
+        chrono::Weekday::Fri => 4,
+        chrono::Weekday::Sat => 5,
+        chrono::Weekday::Sun => 6,
+    };
+    let monday = today_date - Duration::days(days_to_monday);
+    let sunday = monday + Duration::days(6);
+    
+    // Convertir en DateTime<Utc> pour la plage de la requête CalDAV
+    let monday_start = monday.and_time(NaiveTime::from_hms_opt(0, 0, 0).unwrap());
+    let sunday_end = sunday.and_time(NaiveTime::from_hms_opt(23, 59, 59).unwrap());
+    let monday_start_utc = Utc.from_utc_datetime(&monday_start);
+    let sunday_end_utc = Utc.from_utc_datetime(&sunday_end);
+    
+    // Récupérer les événements pour la semaine (filtre côté serveur)
+    let ics_content = match fetch_caldav_events(Some(monday_start_utc), Some(sunday_end_utc)).await {
         Some(content) => content,
         None => {
             return Ok(HttpResponse::ServiceUnavailable().json(json!({
@@ -1255,30 +1291,7 @@ async fn get_calendar_events() -> Result<impl Responder> {
     }
     eprintln!("=== End of Parsed Events ===");
     
-    // Obtenir la date de début de la semaine (lundi)
-    let today = Utc::now();
-    let today_date = today.date_naive();
-    
-    // Calculer le lundi de la semaine en cours
-    let weekday = today_date.weekday();
-    let days_to_monday = match weekday {
-        chrono::Weekday::Mon => 0,
-        chrono::Weekday::Tue => 1,
-        chrono::Weekday::Wed => 2,
-        chrono::Weekday::Thu => 3,
-        chrono::Weekday::Fri => 4,
-        chrono::Weekday::Sat => 5,
-        chrono::Weekday::Sun => 6,
-    };
-    let monday = today_date - Duration::days(days_to_monday);
-    let sunday = monday + Duration::days(6);
-    
-    let sunday_end = sunday.and_time(NaiveTime::from_hms_opt(23, 59, 59).unwrap());
-    let monday_start = monday.and_time(NaiveTime::from_hms_opt(0, 0, 0).unwrap());
-    let monday_start_utc = Utc.from_utc_datetime(&monday_start);
-    let sunday_end_utc = Utc.from_utc_datetime(&sunday_end);
-    
-    // Filtrer les événements de la semaine
+    // Filtrer les événements de la semaine (filtre local au cas où)
     let week_events: Vec<CalendarEvent> = events
         .into_iter()
         .filter(|(start, end, _)| {
@@ -1330,13 +1343,8 @@ async fn main() -> std::io::Result<()> {
         println!("CalDAV: Not configured");
     }
     
-    // Créer l'état partagé
+    // Créer l'état partagé (sans chargement initial des événements CalDAV)
     let state = web::Data::new(AppState::new());
-    
-    // Charger les événements CalDAV au démarrage
-    let events = load_caldav_events_and_update_slots(&state).await;
-    state.load_caldav_events(events);
-    println!("CalDAV synchronization complete");
     
     HttpServer::new(move || {
         App::new()
