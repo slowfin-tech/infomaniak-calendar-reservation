@@ -7,11 +7,11 @@ use ical::parser::Component;
 use reqwest::header::{HeaderMap, HeaderValue, CONTENT_TYPE};
 use reqwest::Method;
 use serde::Serialize;
+use std::collections::HashMap;
 use std::io::Cursor;
 
 // --- Public Models ---
 
-/// Represents a calendar event with summary, start and end times
 #[derive(Debug, Serialize, Clone)]
 pub struct Event {
     pub summary: String,
@@ -19,21 +19,13 @@ pub struct Event {
     pub end: String,
 }
 
-/// Weekly events grouped by day (Monday to Sunday)
 #[derive(Debug, Serialize, Clone)]
-pub struct WeekEvents {
-    pub lundi: Vec<Event>,
-    pub mardi: Vec<Event>,
-    pub mercredi: Vec<Event>,
-    pub jeudi: Vec<Event>,
-    pub vendredi: Vec<Event>,
-    pub samedi: Vec<Event>,
-    pub dimanche: Vec<Event>,
+pub struct CalendarResponse {
+    pub events_by_date: HashMap<String, Vec<Event>>,
 }
 
 // --- CalDAV Configuration ---
 
-/// Configuration for connecting to a CalDAV server
 pub struct CalDavConfig {
     pub url: String,
     pub calendar_uri: String,
@@ -42,15 +34,6 @@ pub struct CalDavConfig {
 }
 
 impl CalDavConfig {
-    /// Creates a new CalDavConfig from environment variables
-    ///
-    /// Required variables:
-    /// - CALDAV_CALENDAR_URI: The calendar URI path
-    /// - CALDAV_LOGIN: The login/username
-    /// - CALDAV_PASSWORD: The password
-    ///
-    /// Optional:
-    /// - CALDAV_URL: The base URL (defaults to https://sync.infomaniak.com/)
     pub fn from_env() -> Self {
         CalDavConfig {
             url: std::env::var("CALDAV_URL").unwrap_or_else(|_| "https://sync.infomaniak.com/".into()),
@@ -60,7 +43,6 @@ impl CalDavConfig {
         }
     }
 
-    /// Returns the full calendar URL
     pub fn calendar_url(&self) -> String {
         format!("{}{}", self.url.trim_end_matches('/'), self.calendar_uri)
     }
@@ -68,22 +50,12 @@ impl CalDavConfig {
 
 // --- Date Helpers ---
 
-/// Returns the start (Monday) and end (Sunday) dates of the next week
-pub fn get_next_week_range() -> (NaiveDate, NaiveDate) {
+pub fn get_sliding_week_range() -> (NaiveDate, NaiveDate) {
     let today = Local::now().date_naive();
-    let days_to_monday = today.weekday().num_days_from_monday() as i32;
-    let days_to_monday_abs = days_to_monday.abs() as i64;
-    let current_monday = today - Duration::days(days_to_monday_abs);
-    let next_monday = current_monday + Duration::weeks(1);
-    let next_sunday = next_monday + Duration::days(6);
-    (next_monday, next_sunday)
+    (today, today + Duration::days(7))
 }
 
-/// Formats a NaiveDateTime for display
-///
-/// Note: Assumes the datetime is already in the correct timezone (Europe/Zurich)
-/// as Infomaniak returns dates with TZID=Europe/Zurich
-pub fn format_display_date(dt: &NaiveDateTime) -> String {
+fn format_display_date(dt: &NaiveDateTime) -> String {
     dt.format("%Y-%m-%d %H:%M:%S").to_string()
 }
 
@@ -106,14 +78,7 @@ fn parse_ical_datetime(s: &str) -> Result<NaiveDateTime, ()> {
     }
 }
 
-/// Expands a recurring event into all occurrences within the given date range
-///
-/// Supports:
-/// - FREQ: DAILY, WEEKLY, MONTHLY, YEARLY
-/// - INTERVAL parameter
-/// - UNTIL constraint
-/// - COUNT constraint
-fn expand_recurring_event_simple(
+fn expand_recurring_event(
     summary: &str,
     start: NaiveDateTime,
     end: NaiveDateTime,
@@ -162,10 +127,9 @@ fn expand_recurring_event_simple(
     if let Some(freq) = freq {
         let mut current_date = start_date;
         let mut iteration_count = 0;
-        let max_iterations = 500;
 
         loop {
-            if iteration_count >= max_iterations {
+            if iteration_count >= 500 {
                 break;
             }
             iteration_count += 1;
@@ -194,13 +158,11 @@ fn expand_recurring_event_simple(
             if current_date > range_end {
                 break;
             }
-
             if let Some(until_date) = until {
                 if current_date > until_date {
                     break;
                 }
             }
-
             if let Some(max_count) = count {
                 if iteration_count >= max_count {
                     break;
@@ -244,12 +206,12 @@ fn parse_ics_content(ics_content: &str, range_start: NaiveDate, range_end: Naive
                 });
 
                 if let Some(rrule) = extract_rrule(&event) {
-                    let expanded = expand_recurring_event_simple(summary, start, end, &rrule, range_start, range_end);
+                    let expanded = expand_recurring_event(summary, start, end, &rrule, range_start, range_end);
                     events.extend(expanded);
                 } else {
                     let event_date = start.date();
                     if event_date >= range_start && event_date <= range_end {
-                        events.extend(vec![(summary.to_string(), start, end)]);
+                        events.push((summary.to_string(), start, end));
                     }
                 }
             }
@@ -261,7 +223,6 @@ fn parse_ics_content(ics_content: &str, range_start: NaiveDate, range_end: Naive
 
 // --- CalDAV Request ---
 
-/// Fetches raw CalDAV response from the server
 pub async fn fetch_caldav_events(config: &CalDavConfig) -> Result<String, String> {
     let client = reqwest::Client::new();
 
@@ -278,7 +239,6 @@ pub async fn fetch_caldav_events(config: &CalDavConfig) -> Result<String, String
 </C:calendar-query>"#;
 
     let url = config.calendar_url();
-
     let mut headers = HeaderMap::new();
     headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/xml; charset=utf-8"));
 
@@ -297,18 +257,12 @@ pub async fn fetch_caldav_events(config: &CalDavConfig) -> Result<String, String
 
     if !response.status().is_success() {
         return Err(format!(
-            "Erreur CalDAV: status={}, body={:?}",
-            response.status(),
-            response.text().await.unwrap_or_else(|_| "N/A".into())
+            "Erreur CalDAV: status={}",
+            response.status()
         ));
     }
 
-    let body = response
-        .text()
-        .await
-        .map_err(|e| format!("Erreur lecture reponse: {}", e))?;
-
-    Ok(body)
+    response.text().await.map_err(|e| format!("Erreur lecture reponse: {}", e))
 }
 
 // --- Extract ICS from XML ---
@@ -317,7 +271,6 @@ fn extract_ics_from_xml(xml_content: &str) -> Vec<String> {
     let mut ics_contents = Vec::new();
     let start_tags = ["<C:calendar-data>", "<cal:calendar-data>"];
     let end_tags = ["</C:calendar-data>", "</cal:calendar-data>"];
-
     let mut content = xml_content;
 
     for start_tag in &start_tags {
@@ -340,81 +293,40 @@ fn extract_ics_from_xml(xml_content: &str) -> Vec<String> {
             }
         }
     }
-
     ics_contents
 }
 
-/// Groups events by day of the week
-///
-/// Assumes dates are already in local timezone (Europe/Zurich)
-fn group_events_by_day(events: Vec<(String, NaiveDateTime, NaiveDateTime)>) -> WeekEvents {
-    let mut week = WeekEvents {
-        lundi: Vec::new(),
-        mardi: Vec::new(),
-        mercredi: Vec::new(),
-        jeudi: Vec::new(),
-        vendredi: Vec::new(),
-        samedi: Vec::new(),
-        dimanche: Vec::new(),
-    };
+// --- Group by date ---
 
-    let (start_date, _) = get_next_week_range();
+fn group_by_date(events: Vec<(String, NaiveDateTime, NaiveDateTime)>) -> CalendarResponse {
+    let mut map: HashMap<String, Vec<Event>> = HashMap::new();
 
     for (summary, start, end) in events {
-        let local_date = start.date();
-
-        let days_since_monday = (local_date - start_date).num_days();
-
-        if days_since_monday >= 0 && days_since_monday < 7 {
-            let event = Event {
-                summary,
-                start: format_display_date(&start),
-                end: format_display_date(&end),
-            };
-            match days_since_monday {
-                0 => week.lundi.push(event),
-                1 => week.mardi.push(event),
-                2 => week.mercredi.push(event),
-                3 => week.jeudi.push(event),
-                4 => week.vendredi.push(event),
-                5 => week.samedi.push(event),
-                6 => week.dimanche.push(event),
-                _ => {}
-            }
-        }
+        let date_key = start.date().format("%Y-%m-%d").to_string();
+        map.entry(date_key).or_default().push(Event {
+            summary,
+            start: format_display_date(&start),
+            end: format_display_date(&end),
+        });
     }
 
-    week
+    CalendarResponse { events_by_date: map }
 }
 
-/// Main function to fetch and process calendar events for the next week
-///
-/// Returns a WeekEvents struct with all events grouped by day
-pub async fn get_next_week_calendar_events(config: &CalDavConfig) -> WeekEvents {
-    let (range_start, range_end) = get_next_week_range();
+// --- Main ---
+
+pub async fn get_sliding_week_calendar_events(config: &CalDavConfig) -> CalendarResponse {
+    let (range_start, range_end) = get_sliding_week_range();
 
     match fetch_caldav_events(config).await {
         Ok(xml_response) => {
             let ics_contents = extract_ics_from_xml(&xml_response);
-
             let mut all_events = Vec::new();
             for ics in ics_contents {
-                let events = parse_ics_content(&ics, range_start, range_end);
-                all_events.extend(events);
+                all_events.extend(parse_ics_content(&ics, range_start, range_end));
             }
-
-            group_events_by_day(all_events)
+            group_by_date(all_events)
         }
-        Err(_) => {
-            WeekEvents {
-                lundi: Vec::new(),
-                mardi: Vec::new(),
-                mercredi: Vec::new(),
-                jeudi: Vec::new(),
-                vendredi: Vec::new(),
-                samedi: Vec::new(),
-                dimanche: Vec::new(),
-            }
-        }
+        Err(_) => CalendarResponse { events_by_date: HashMap::new() },
     }
 }
