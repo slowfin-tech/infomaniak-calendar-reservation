@@ -315,7 +315,11 @@ fn group_by_date(events: Vec<(String, NaiveDateTime, NaiveDateTime)>) -> Calenda
 
 // --- Main ---
 
-pub async fn get_sliding_week_calendar_events(config: &CalDavConfig) -> CalendarResponse {
+/// Récupère les événements de la semaine glissante sous forme brute,
+/// avant formatage. Utilisé par l'endpoint events et par le module slots.
+pub async fn get_sliding_week_raw_events(
+    config: &CalDavConfig,
+) -> Vec<(String, NaiveDateTime, NaiveDateTime)> {
     let (range_start, range_end) = get_sliding_week_range();
 
     match fetch_caldav_events(config).await {
@@ -325,8 +329,12 @@ pub async fn get_sliding_week_calendar_events(config: &CalDavConfig) -> Calendar
             for ics in ics_contents {
                 all_events.extend(parse_ics_content(&ics, range_start, range_end));
             }
-            group_by_date(all_events)
+            all_events
         }
-        Err(_) => CalendarResponse { events_by_date: HashMap::new() },
+        Err(_) => Vec::new(),
     }
+}
+
+pub async fn get_sliding_week_calendar_events(config: &CalDavConfig) -> CalendarResponse {
+    group_by_date(get_sliding_week_raw_events(config).await)
 }
