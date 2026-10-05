@@ -1,0 +1,23 @@
+# Image CI: binaire musl precompile (job "server" de .github/workflows/ci.yml)
+# + bundle UI + config. Aucune compilation Rust dans le conteneur: le build
+# reste rapide, dans les contraintes de timeout des jobs.
+# (Pour un build local autonome, utiliser le Dockerfile standard.)
+FROM alpine:3.20
+WORKDIR /app
+
+# Certificats CA pour les appels HTTPS (Infomaniak). Le binaire est statique.
+RUN apk add --no-cache ca-certificates
+
+# Configuration non-secret; les secrets restent dans l'environnement.
+COPY config.toml /app/config.toml
+
+# Bundle UI: sav.js (initializer), sav.css, module wasm (pkg/), page de demo.
+COPY ui/static /app/ui/static
+
+# Binaire precompile, fourni par la CI dans dist/.
+COPY dist/sav-server /usr/local/bin/sav-server
+
+ENV SAV_PORT=8080
+EXPOSE 8080
+
+CMD ["sav-server"]
