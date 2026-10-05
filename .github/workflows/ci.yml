@@ -6,13 +6,17 @@ on:
     tags: ["v*"]
   pull_request:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # Build + tests du serveur, puis binaire musl statique (artefact pour l'image)
-  server:
-    name: Serveur (tests + binaire musl)
+  # Tests (serveur + module wasm) et artefacts: binaire musl + bundle UI.
+  build:
+    name: Tests + artefacts (binaire musl, bundle UI)
     runs-on: ubuntu-latest
     timeout-minutes: 14
     steps:
@@ -21,38 +25,28 @@ jobs:
         with:
           targets: x86_64-unknown-linux-musl
       - uses: Swatinem/rust-cache@v2
-      - name: Tests
-        run: cargo test --locked
-      - name: Binaire statique musl (x86_64)
-        run: |
-          sudo apt-get update && sudo apt-get install -y musl-tools
-          cargo build --release --locked --target x86_64-unknown-linux-musl
-      - uses: actions/upload-artifact@v4
-        with:
-          name: sav-server-binary
-          path: target/x86_64-unknown-linux-musl/release/sav_server
-          retention-days: 7
-          if-no-files-found: error
-
-  # Tests du module wasm + bundle statique (artefact pour l'image)
-  ui:
-    name: Module wasm (tests + bundle)
-    runs-on: ubuntu-latest
-    timeout-minutes: 14
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
       - uses: jetli/wasm-pack-action@v0.4.0
         with:
           version: latest
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Tests (Node, sans navigateur)
+      - name: Tests serveur
+        run: cargo test --locked
+      - name: Tests module wasm (Node, sans navigateur)
         run: cd ui && wasm-pack test --node
-      - name: Bundle statique (build wasm + copie dans static/)
+      - name: Binaire statique musl (x86_64)
+        run: |
+          sudo apt-get update && sudo apt-get install -y musl-tools
+          cargo build --release --locked --target x86_64-unknown-linux-musl
+      - name: Bundle statique UI (build wasm + copie dans static/)
         run: make ui-build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sav-server-binary
+          path: target/x86_64-unknown-linux-musl/release/sav_server
+          retention-days: 7
+          if-no-files-found: error
       - uses: actions/upload-artifact@v4
         with:
           name: ui-static
@@ -63,7 +57,7 @@ jobs:
   # conteneur, build ~1 min), push vers GHCR hors pull requests.
   docker:
     name: Image Docker (GHCR)
-    needs: [server, ui]
+    needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 14
     permissions:
