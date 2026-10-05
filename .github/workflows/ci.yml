@@ -30,7 +30,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: sav-server-binary
-          path: target/x86_64-unknown-linux-musl/release/sav-server
+          path: target/x86_64-unknown-linux-musl/release/sav_server
           retention-days: 7
           if-no-files-found: error
 
@@ -80,7 +80,7 @@ jobs:
           name: ui-static
           path: ui/static
       - name: Permissions du binaire
-        run: chmod +x dist/sav-server
+        run: chmod +x dist/sav_server
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io
