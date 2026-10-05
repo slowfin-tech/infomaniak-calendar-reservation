@@ -8,7 +8,7 @@ versionnement [SemVer](https://semver.org/lang/fr/).
 
 ### Ajouté
 
-- Serveur SAV (Actix-web) : `GET /api/calendar/events` (événements CalDAV
+- Serveur Infomaniak (Actix-web) : `GET /api/calendar/events` (événements CalDAV
   de la semaine glissante, expansion des récurrences RRULE côté client)
 - `GET /api/slots` : créneaux de 30 min dérivés du calendar, groupés par
   date, statut `booked` par chevauchement

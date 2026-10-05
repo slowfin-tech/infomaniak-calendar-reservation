@@ -1,4 +1,4 @@
-# SAV - CalDAV Events Server
+# Infomaniak - CalDAV Events Server
 
 ## Description
 
@@ -25,8 +25,8 @@ sav/
 │   ├── config.rs        # Configuration non-secret (config.toml, global())
 │   ├── booking.rs       # Module réservation - POST /api/bookings, API Infomaniak kMeet
 │   ├── calendar.rs       # Module CalDAV - logique métier
-│   └── slots.rs          # Module slots - créneaux de SAV de 30 min
-└── ui/                   # Interface SAV en wasm (crate indépendante sav_ui, voir ui/README.md)
+│   └── slots.rs          # Module slots - créneaux d'Infomaniak de 30 min
+└── ui/                   # Interface Infomaniak en wasm (crate indépendante sav_ui, voir ui/README.md)
     ├── Cargo.toml        # Crate wasm (cdylib, Yew)
     ├── build.rs          # Injecte SAV_API_KEY / SAV_URL au build (depuis .env ou l'environnement)
     ├── src/lib.rs        # Client API + application Yew
@@ -90,7 +90,7 @@ par défaut et les jours non listés sont **fermés** (aucun créneau).
 - **Rate limiting** : `actix-governor`, par IP : 1 requête autorisée toutes les 10 secondes, burst de 50. Au-delà : `429 Too Many Requests`.
 - **CORS** : `actix-cors::Cors::permissive()` — le composant UI (crate `ui/` du monorepo, voir son README) appelle l'API depuis une autre origine. L'accès reste protégé par la clé d'API.
 - **HTTPS** : à terminer au reverse proxy (Caddy/nginx) devant le serveur ; actix écoute en HTTP.
-- **Port** : `SAV_PORT` (défaut `8080`).
+- **Port** : `[server] port` de config.toml (défaut `8080`).
 
 ---
 
@@ -134,17 +134,17 @@ par défaut et les jours non listés sont **fermés** (aucun créneau).
 
 ### GET `/api/slots`
 
-**Description :** Liste **tous** les créneaux de SAV sur la semaine glissante (7 jours), groupés par jour et avec leur statut de réservation.
+**Description :** Liste **tous** les créneaux d'Infomaniak sur la semaine glissante (7 jours), groupés par jour et avec leur statut de réservation.
 
 **Un slot :**
-- Durée configurable (`SAV_SLOT_DURATION`, défaut 30 minutes)
+- Durée configurable (`[slots] duration_minutes`, défaut 30 minutes)
 - ID au format `YYYYMMDDHHMM` (début du créneau)
 - `start_at` au format `HH:MM` (heure locale de début du créneau)
 - Propriété `booked` (booléen) — `true` si un événement du calendar chevauche le créneau
 
-**Périodes horaires :** configurables jour par jour via `SAV_PERIODS`
+**Périodes horaires :** configurables jour par jour via `[slots.periods]`
 (clés `mon`–`sun`, périodes `"HH:MM-HH:MM"`). Par défaut : 10:00–12:00 et
-14:00–16:00 tous les jours. Si `SAV_PERIODS` est défini, il remplace les
+14:00–16:00 tous les jours. Si `[slots.periods]` est défini, il remplace les
 valeurs par défaut et les jours non listés sont **fermés** (aucun créneau).
 La grille des débuts de créneaux est alignée sur le début de chaque période
 (ex. période 09:00–11:45 avec 45 min → 09:00, 09:45, 10:30).
@@ -152,7 +152,7 @@ La grille des débuts de créneaux est alignée sur le début de chaque période
 **Règles :**
 - Les slots sont groupés par date (clé `YYYY-MM-DD`), dans l'ordre chronologique
 - Un slot chevauchant un événement du calendar est marqué `booked: true`
-- Les slots déjà passés ou commençant avant `maintenant + SAV_MIN_DELAY_MINUTES` ne sont pas retournés
+- Les slots déjà passés ou commençant avant `maintenant + [slots] min_delay_minutes` ne sont pas retournés
 - Le week-end est inclus pour l'instant
 
 **Réponse :**
@@ -172,7 +172,7 @@ La grille des débuts de créneaux est alignée sur le début de chaque période
 
 ### POST `/api/bookings`
 
-**Description :** Réserve un slot de SAV en créant un événement sur le calendar Infomaniak via l'API « Plan a conference » (`POST https://api.infomaniak.com/1/kmeet/rooms`). Cette API crée une salle visio kMeet **et** l'événement calendar avec l'URL de réunion.
+**Description :** Réserve un slot d'Infomaniak en créant un événement sur le calendar Infomaniak via l'API « Plan a conference » (`POST https://api.infomaniak.com/1/kmeet/rooms`). Cette API crée une salle visio kMeet **et** l'événement calendar avec l'URL de réunion.
 
 **Requête :**
 ```json
@@ -229,7 +229,7 @@ La grille des débuts de créneaux est alignée sur le début de chaque période
 
 ### GET `/api/bookings/next?email=client@domain.com`
 
-**Description :** Retourne le **prochain rendez-vous** SAV de l'utilisateur (le plus proche événement futur dont le titre est `SAV - {email}`), dans la semaine glissante. C'est ce qui alimente le bandeau de l'UI une fois un rendez-vous pris.
+**Description :** Retourne le **prochain rendez-vous** Infomaniak de l'utilisateur (le plus proche événement futur dont le titre est `SAV - {email}`), dans la semaine glissante. C'est ce qui alimente le bandeau de l'UI une fois un rendez-vous pris.
 
 **Réponse (rendez-vous trouvé) :**
 ```json
@@ -253,7 +253,7 @@ Le champ `link` (lien de la salle visio) est extrait de la description ou du lie
 
 ### POST `/api/bookings/cancel`
 
-**Description :** Annule le prochain rendez-vous SAV de l'utilisateur en **supprimant l'événement du calendar Infomaniak** via CalDAV (`DELETE {calendar_uri}/{uid}.ics`).
+**Description :** Annule le prochain rendez-vous Infomaniak de l'utilisateur en **supprimant l'événement du calendar Infomaniak** via CalDAV (`DELETE {calendar_uri}/{uid}.ics`).
 
 **Requête :**
 ```json
@@ -387,7 +387,7 @@ ical = "0.11"        # Parsing ICS
 # En local (dev)
 cargo run
 
-# Le serveur écoute sur :0.0.0.0:8080 (configurable via SAV_PORT)
+# Le serveur écoute sur :0.0.0.0:8080 (configurable via `[server] port` de config.toml)
 ```
 
 ## Docker

@@ -1,6 +1,6 @@
 # sav-ui
 
-Interface de réservation de créneaux SAV : application **Yew** compilée en
+Interface de réservation de créneaux Infomaniak : application **Yew** compilée en
 wasm. Membre `ui/` du monorepo, mais **composant indépendant** — la crate ne
 partage aucun code avec le serveur et communique uniquement via son API HTTP
 (`/api/slots`, `/api/bookings`).
@@ -103,7 +103,7 @@ objet JS simple).
 
 ### Manuels
 
-**Smoke test en ligne de commande** (serveur SAV démarré) — le vrai module
+**Smoke test en ligne de commande** (serveur Infomaniak démarré) — le vrai module
 contre le vrai serveur, sans navigateur :
 
 ```bash

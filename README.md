@@ -1,7 +1,7 @@
-# SAV - Réservation de créneaux
+# Infomaniak - Réservation de créneaux
 
 Serveur Rust (Actix-web) + interface WebAssembly (Yew) pour gérer des
-créneaux de rendez-vous SAV : les créneaux sont dérivés d'un calendar
+créneaux de rendez-vous Infomaniak : les créneaux sont dérivés d'un calendar
 Infomaniak (CalDAV), la réservation crée l'événement avec sa salle visio
 kMeet et envoie un email de confirmation (pièce jointe agenda incluse).
 
