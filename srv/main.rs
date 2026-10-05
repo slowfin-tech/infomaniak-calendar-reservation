@@ -30,6 +30,25 @@ pub(crate) fn check_api_key(req: &HttpRequest) -> Result<(), actix_web::HttpResp
     }
 }
 
+/// Configuration runtime de l'interface, servie au demarrage du module
+/// wasm (GET /api/config). Non authentifiee: le module n'a pas encore la
+/// cle - celle-ci est publique par conception (elle etait auparavant
+/// cuite au build dans le wasm).
+#[derive(serde::Serialize)]
+struct UiPublicConfig {
+    api_key: String,
+    ui: config::UiConfig,
+}
+
+#[get("/api/config")]
+async fn get_ui_config() -> actix_web::HttpResponse {
+    let config = config::global();
+    actix_web::HttpResponse::Ok().json(UiPublicConfig {
+        api_key: std::env::var("SAV_API_KEY").unwrap_or_default(),
+        ui: config.ui.clone(),
+    })
+}
+
 #[get("/api/calendar/events")]
 async fn get_calendar_events(req: HttpRequest) -> actix_web::HttpResponse {
     if let Err(resp) = check_api_key(&req) {
@@ -82,6 +101,7 @@ async fn main() -> std::io::Result<()> {
             .service(booking::create_booking)
             .service(booking::get_next_booking)
             .service(booking::cancel_booking)
+            .service(get_ui_config)
             // Bundle UI (sav.js, sav.css, pkg/, page de demo) servi par le
             // meme hote - enregistre en dernier, ne capture que /api/ ne
             // touche pas.

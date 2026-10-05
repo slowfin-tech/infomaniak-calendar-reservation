@@ -54,8 +54,8 @@ Un fichier absent est toléré (valeurs par défaut) ; un fichier invalide fait 
 | Section | Clé | Description | Défaut |
 |---------|-----|-------------|--------|
 | `[server]` | `port` | Port d'écoute | `8080` |
-| `[ui]` | `title` | Titre affiché par l'interface (injecté au build du module wasm) | `"SAV - Rendez-vous"` |
-| `[ui]` | `placeholder`, `description_label`, `cancel_confirm`, ... | Textes de l'interface — **toute clé de `[ui]` est injectée au build du module wasm** sous la forme `SAV_UI_<CLÉ>` (lue via `option_env!`, défaut dans le code si absente) | défauts dans `ui/src/lib.rs` |
+| `[ui]` | `title` | Titre affiché par l'interface | `"SAV - Rendez-vous"` |
+| `[ui]` | `placeholder`, `description_label`, `cancel_confirm`, ... | Textes de l'interface — **toute clé de `[ui]` est servie au module wasm au démarrage** via `GET /api/config` (défauts dans le code si absente) | défauts dans `ui/src/lib.rs` |
 | `[caldav]` | `url` | URL de base du serveur CalDAV | `https://sync.infomaniak.com/` |
 | `[caldav]` | `calendar_uri` | Chemin du calendar | — |
 | `[infomaniak]` | `calendar_id` | ID du calendar Infomaniak où créer les événements | — |
@@ -224,6 +224,27 @@ La grille des débuts de créneaux est alignée sur le début de chaque période
 - Un **email de confirmation** est envoyé au client via SMTP (`[email]` de config.toml + secrets SMTP_* du `.env`) : meilleur effort, un échec SMTP est tracé sur stderr mais n'annule pas la réservation
 - Anti double-réservation : le `slot_id` est « claimé » atomiquement en mémoire (`Mutex<HashSet>`) pendant la vérification CalDAV + la création de l'événement ; une requête concurrente sur le même slot reçoit `409` immédiatement
 - Limite du verrou : il est en mémoire du process, donc valable pour une instance unique du serveur. Pour plusieurs instances (ou un redémarrage), il faudrait un verrou partagé (Redis, ou table SQL avec contrainte d'unicité sur `slot_id`)
+
+---
+
+### GET `/api/config`
+
+**Description :** Configuration runtime de l'interface, chargée au démarrage du module wasm. **Non authentifié** (le module n'a pas encore la clé d'API — celle-ci est publique par conception, voir `SECURITY.md`).
+
+**Réponse :**
+```json
+{
+  "api_key": "9984a...",
+  "ui": {
+    "title": "SAV - Rendez-vous",
+    "placeholder": "Problème de connexion au boîtier...",
+    "description_label": "Décrivez le problème :",
+    "cancel_confirm": "Annuler votre rendez-vous ?"
+  }
+}
+```
+
+`ui` reflète la section `[ui]` de config.toml : toute clé ajoutée y est servie telle quelle.
 
 ---
 
@@ -409,7 +430,6 @@ Notes :
 - `.env` (secrets) est exclu du contexte Docker (`.dockerignore`) et passe par `--env-file` au `docker run` ; `config.toml` (non-secret) est copié dans l'image
 - Pour surcharger la config en conteneur : monter un `config.toml` et/ou définir `CONFIG_PATH`
 - `ui/Cargo.toml` est copié au build car le workspace le référence ; le bundle UI vient de `ui/static` (construit au préalable avec `make ui-build`)
-- **Déploiement sur un autre hôte que localhost** : le module wasm a l'URL de l'API cuite au build. Reconstruisez-le avec `SAV_URL=` vide dans le `.env` (`make ui-build`) : le module s'adapte alors à l'origine de la page (mono-origine). Sinon, exportez `SAV_URL=https://votre-hote` avant le build
 - Le binaire est statique : aucun paquet runtime à maintenir hors `ca-certificates`
 - Contrepartie de musl : allocateur moins performant que glibc sous forte charge, sans impact pour ce serveur
 

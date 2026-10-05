@@ -25,9 +25,10 @@ publication d'un correctif seront coordonnés avec vous, avec crédit dans le
 - **Secrets** : tout secret vit dans `.env` (non versionné) ou l'environnement
   du conteneur — jamais dans le dépôt, l'image Docker embarque `config.toml`
   (non-secret) uniquement
-- **Clé d'API du module wasm** : l'interface wasm embarque la clé d'API au
-  build ; elle est par nature lisible dans le `.wasm`. Elle doit rester
-  dédiée à ce frontend et révocable indépendamment des autres secrets
+- **Clé d'API de l'interface** : le module wasm la charge au démarrage via
+  `GET /api/config` (endpoint non authentifié) ; elle est par nature publique
+  (auparavant lisible dans le `.wasm`). Elle doit rester dédiée à ce frontend
+  et révocable indépendamment des autres secrets
 - **Email** : l'envoi SMTP se fait en STARTTLS (587) ou TLS implicite (465)
 - Si vous découvrez une fuite de secret dans l'historique : signalez-le
   immédiatement et faites **révoquer** le secret concerné avant toute

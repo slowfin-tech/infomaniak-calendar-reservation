@@ -71,22 +71,6 @@ fn parse_reponse_slots() {
 }
 
 #[wasm_bindgen_test]
-fn config_build_presente() {
-    // build.rs doit avoir injecte la cle, l'URL et les textes [ui] de
-    // config.toml (SAV_UI_<CLE>).
-    assert!(!env!("SAV_API_KEY").is_empty());
-    assert!(!env!("SAV_URL").is_empty());
-    assert!(!option_env!("SAV_UI_TITLE").unwrap_or("").is_empty());
-    // Le placeholder est defini dans config.toml.
-    assert!(!option_env!("SAV_UI_PLACEHOLDER").unwrap_or("").is_empty());
-    // Valeurs par defaut garanties hors config.
-    assert_eq!(
-        option_env!("SAV_UI_DESCRIPTION_LABEL").unwrap_or("Décrivez le problème :"),
-        "Décrivez le problème :"
-    );
-}
-
-#[wasm_bindgen_test]
 fn format_date_affichage() {
     use crate::format_display_date;
     // Lundi 5 octobre 2026, premiere lettre en majuscule.
@@ -265,6 +249,13 @@ globalThis.__respond = (body, status, url) => {
   Object.defineProperty(response, 'url', { value: url });
   return response;
 };
+// Routeur: repond selon le chemin de l'URL, sinon le corps par defaut.
+globalThis.__route = (input) => {
+  const url = (input && input.url) ? input.url : String(input);
+  const path = url.replace(/^https?:\/\/[^/]+/, "");
+  const body = (globalThis.__routes && globalThis.__routes[path]) || globalThis.__defaultBody;
+  return globalThis.__respond(body, 200, url);
+};
 "#;
 
 fn client_for_tests() -> SavClient {
@@ -408,15 +399,16 @@ async fn cle_api_manquante_renvoie_erreur() {
 // Object.entries() cote script ne voit rien.
 #[wasm_bindgen_test]
 async fn smoke_list_rend_un_objet_js_simple() {
+    // Le smoke hook charge d'abord la configuration runtime (/api/config)
+    // puis les creneaux (/api/slots): le stub route par chemin.
     let _restorer = stub_fetch(&format!(
         r#"
         {helpers}
-        globalThis.__slotsJson = {json};
-        globalThis.fetch = (input) =>
-          Promise.resolve(globalThis.__respond(
-            globalThis.__slotsJson, 200,
-            "http://localhost:8080/api/slots"
-          ));
+        globalThis.__routes = {{
+          "/api/config": {{ "api_key": "cle-test", "ui": {{ "title": "Test" }} }},
+          "/api/slots": {json}
+        }};
+        globalThis.fetch = (input) => Promise.resolve(globalThis.__route(input));
         "#,
         helpers = JS_HELPERS,
         json = SLOTS_FIXTURE
@@ -428,6 +420,27 @@ async fn smoke_list_rend_un_objet_js_simple() {
     let slots = js_sys::Array::from(&day1);
     assert_eq!(slots.length(), 3);
     assert_eq!(get_str(&slots.get(0), "id"), "202610011000");
+}
+
+#[wasm_bindgen_test]
+async fn config_runtime_parsee_depuis_api_config() {
+    let _restorer = stub_fetch(&format!(
+        r#"
+        {helpers}
+        globalThis.__routes = {{
+          "/api/config": {{ "api_key": "cle-abc", "ui": {{ "title": "Mon titre", "placeholder": "Dites tout" }} }}
+        }};
+        globalThis.fetch = (input) => Promise.resolve(globalThis.__route(input));
+        "#,
+        helpers = JS_HELPERS
+    ));
+
+    let config = crate::SavClient::fetch_config().await.expect("config doit etre lue");
+    assert_eq!(config.api_key, "cle-abc");
+    assert_eq!(config.ui.get("title").map(String::as_str), Some("Mon titre"));
+    assert_eq!(config.ui.get("placeholder").map(String::as_str), Some("Dites tout"));
+    // Cle absente: repli par defaut via l'accesseur.
+    assert_eq!(crate::ui_text(&config.ui, "cancel_confirm", "par defaut"), "par defaut");
 }
 
 // Garde-fou sur la forme de la map serialisee pour la page/script.

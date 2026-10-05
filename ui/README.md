@@ -5,20 +5,19 @@ wasm. Membre `ui/` du monorepo, mais **composant indépendant** — la crate ne
 partage aucun code avec le serveur et communique uniquement via son API HTTP
 (`/api/slots`, `/api/bookings`).
 
-## Configuration au build
+## Configuration au démarrage (runtime)
 
-`ui/build.rs` incorpore ces paramètres **dans le module wasm** :
+Aucune configuration n'est compilée dans le module wasm. Au démarrage, le
+module charge `GET /api/config` sur le serveur, qui lui fournit :
 
-| Paramètre injecté | Source | Défaut |
-|---|---|---|
-| `SAV_API_KEY` | variable d'environnement, puis `SAV_API_KEY=` du `.env` du repo | — |
-| `SAV_URL` | variable d'environnement, puis `SAV_URL=` du `.env` | `http://localhost:8080` |
-| `SAV_UI_<CLÉ>` | chaque clé de la section `[ui]` du `config.toml` (title, placeholder, description_label, cancel_confirm, ...) | défauts dans le code |
+- `api_key` — la clé d'API (lue depuis `SAV_API_KEY` du `.env` du serveur)
+- `ui` — la section `[ui]` de `config.toml` telle quelle (title,
+  placeholder, description_label, cancel_confirm, ... : **toute clé ajoutée
+  est servie automatiquement**)
 
-**`SAV_URL=` vide** (dans le `.env`) signifie *même origine au runtime* : le
-module appelle l'API sur l'origine de la page — le cas du conteneur Docker qui
-sert l'UI et l'API (`http://localhost:8080/`). **Toute nouvelle clé `[ui]` dans
-`config.toml` est automatiquement injectée** au prochain build du module.
+L'URL du serveur est l'origine de la page par défaut (déploiement
+mono-origine, ex: conteneur Docker). Pour un API sur une autre origine,
+passez `apiUrl` à l'initialisation (voir ci-dessous).
 
 La page n'a donc rien à configurer. Attention : la clé est lisible dans le
 `.wasm` — elle doit rester dédiée à ce module et révocable. Le titre
@@ -49,7 +48,8 @@ ui/
   Sav('init', {
     target: '#sav-widget',          // conteneur (défaut: fin du <body>)
     name: 'Jean Dupont',            // nom du client (requis côté API)
-    email: 'client@domain.com'      // email du client
+    email: 'client@domain.com',     // email du client
+    apiUrl: ''                      // optionnel: autre origine pour l'API
   });
 </script>
 <script async src="https://votre-hote/sav.js"></script>

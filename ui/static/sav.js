@@ -65,10 +65,13 @@
     app.appendChild(root);
     target.appendChild(app);
 
-    // 3. Configuration lisible par le module wasm.
+    // 3. Configuration lisible par le module wasm. La cle d'API et les
+    // textes viennent de GET /api/config au demarrage; apiUrl (optionnel)
+    // designe un serveur d'API sur une autre origine.
     window.__sav_config = {
       email: options.email || null,
       name: options.name || null,
+      apiUrl: options.apiUrl || null,
     };
 
     // 4. Le wasm n'est charge qu'au premier clic; la modal se re-ouvre via

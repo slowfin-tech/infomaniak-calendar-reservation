@@ -67,14 +67,29 @@ struct NextBookingResponse {
     next_booking: Option<NextBooking>,
 }
 
-// --- Client API ---
+// --- Configuration runtime ---
 
-/// Resout la base de l'API: SAV_URL vide = origine de la page (deploiement
+/// Configuration publique servie par GET /api/config. `ui` est la section
+/// [ui] de config.toml servie telle quelle (title, placeholder, ...).
+#[derive(Debug, Clone, Deserialize, PartialEq, Default)]
+struct RuntimeConfig {
+    #[serde(default)]
+    api_key: String,
+    #[serde(default)]
+    ui: std::collections::BTreeMap<String, String>,
+}
+
+/// Texte d'interface depuis la config runtime, avec repli par defaut.
+fn ui_text(ui: &std::collections::BTreeMap<String, String>, key: &str, fallback: &str) -> String {
+    ui.get(key).cloned().unwrap_or_else(|| fallback.to_string())
+}
+
+/// Resout la base de l'API: vide = origine de la page (deploiement
 /// mono-origine, ex: conteneur servant UI + API). Hors navigateur (Node),
 /// retour au localhost de dev.
-fn resolve_base_url(baked: &str) -> String {
-    if !baked.is_empty() {
-        return baked.trim_end_matches('/').to_string();
+fn resolve_base_url(base: &str) -> String {
+    if !base.is_empty() {
+        return base.trim_end_matches('/').to_string();
     }
     web_sys::window()
         .and_then(|w| w.location().origin().ok())
@@ -82,7 +97,27 @@ fn resolve_base_url(baked: &str) -> String {
         .unwrap_or_else(|| "http://localhost:8080".to_string())
 }
 
-pub(crate) struct SavClient {    base_url: String,
+/// Recupere la configuration runtime depuis GET /api/config (endpoint non
+/// authentifie: le module n'a pas encore la cle).
+async fn fetch_runtime_config(base: &str) -> Result<RuntimeConfig, String> {
+    let response = reqwest::Client::new()
+        .get(format!("{}/api/config", base))
+        .send()
+        .await
+        .map_err(|e| format!("erreur reseau: {e}"))?;
+
+    let status = response.status();
+    if !status.is_success() {
+        let body = response.text().await.unwrap_or_default();
+        return Err(format!("erreur API: {} {}", status, body));
+    }
+
+    response.json().await.map_err(|e| format!("reponse illisible: {e}"))
+}
+
+#[derive(Clone)]
+pub(crate) struct SavClient {
+    base_url: String,
     api_key: String,
 }
 
@@ -94,12 +129,18 @@ impl SavClient {
         }
     }
 
-    /// Configuration since au build (SAV_API_KEY / SAV_URL via build.rs).
-    /// Configuration depuis le build (SAV_API_KEY / SAV_URL via build.rs).
-    /// SAV_URL vide (= meme origine): resolution runtime depuis la page,
-    /// ce qui permet de servir l'UI et l'API depuis le meme hote.
-    pub(crate) fn from_build_config() -> SavClient {
-        SavClient::new(resolve_base_url(env!("SAV_URL")), env!("SAV_API_KEY").to_string())
+    /// Client depuis la configuration runtime (fetch de /api/config).
+    pub(crate) async fn from_runtime_config() -> Result<SavClient, String> {
+        let base = resolve_base_url(&config_value("apiUrl").unwrap_or_default());
+        let config = fetch_runtime_config(&base).await?;
+        Ok(SavClient::new(base, config.api_key))
+    }
+
+    /// Recupere la configuration runtime (api/config ne demande pas la cle:
+    /// le module ne l'a pas encore).
+    pub(crate) async fn fetch_config() -> Result<RuntimeConfig, String> {
+        let base = resolve_base_url(&config_value("apiUrl").unwrap_or_default());
+        fetch_runtime_config(&base).await
     }
 
     /// Retourne tous les creneaux de la semaine, groupes par date, avec leur
@@ -335,7 +376,17 @@ fn App() -> Html {
     // re-ouverte via window.__savToggle pose par l'effet de montage.
     let open = use_state(|| true);
 
-    let client = use_memo((), |_| SavClient::from_build_config());
+    // Configuration runtime: chargee au demarrage depuis GET /api/config
+    // (plus rien n'est cuit au build). Client API derive de cette config.
+    let runtime_config = use_state(|| None::<RuntimeConfig>);
+    let client = use_memo((*runtime_config).clone(), move |config| {
+        config.clone().map(|config| {
+            SavClient::new(
+                resolve_base_url(&config_value("apiUrl").unwrap_or_default()),
+                config.api_key.clone(),
+            )
+        })
+    });
 
     // Rafraichit la liste des creneaux et le prochain rendez-vous.
     let refresh = {
@@ -346,11 +397,13 @@ fn App() -> Html {
         let client = client.clone();
         let email = email.clone();
         Callback::from(move |_: ()| {
+            let Some(client) = (*client).clone() else {
+                return;
+            };
             let slots = slots.clone();
             let status = status.clone();
             let is_error = is_error.clone();
             let next_booking = next_booking.clone();
-            let client = client.clone();
             let email = (*email).clone();
             status.set("Chargement des creneaux...".into());
             is_error.set(false);
@@ -380,12 +433,32 @@ fn App() -> Html {
         })
     };
 
-    // Charge les creneaux au montage (le module n'existe qu'apres le clic
-    // de la page hote, ce premier chargement suit donc l'activation).
+    // Charge la configuration au montage (le module n'existe qu'apres le
+    // clic de la page hote). Les creneaux suivent une fois le client pret.
+    {
+        let runtime_config = runtime_config.clone();
+        let status = status.clone();
+        let is_error = is_error.clone();
+        use_effect_with((), move |_| {
+            wasm_bindgen_futures::spawn_local(async move {
+                match SavClient::fetch_config().await {
+                    Ok(config) => runtime_config.set(Some(config)),
+                    Err(e) => {
+                        is_error.set(true);
+                        status.set(e);
+                    }
+                }
+            });
+        });
+    }
+
+    // Rafraichit les donnees quand le client (issu de la config) est pret.
     {
         let refresh = refresh.clone();
-        use_effect_with((), move |_| {
-            refresh.emit(());
+        use_effect_with(runtime_config.clone(), move |config| {
+            if config.is_some() {
+                refresh.emit(());
+            }
         });
     }
 
@@ -443,10 +516,12 @@ fn App() -> Html {
                 return;
             }
 
+            let Some(client) = (*client).clone() else {
+                return;
+            };
             let status = status.clone();
             let is_error = is_error.clone();
             let refresh = refresh.clone();
-            let client = client.clone();
             let selected = selected.clone();
             let description_state = description.clone();
             status.set("Reservation en cours...".into());
@@ -496,13 +571,15 @@ fn App() -> Html {
         let client = client.clone();
         let email = email.clone();
         Callback::from(move |(): ()| {
+            let Some(client) = (*client).clone() else {
+                return;
+            };
             let Some(email) = (*email).clone() else {
                 return;
             };
             let status = status.clone();
             let is_error = is_error.clone();
             let refresh = refresh.clone();
-            let client = client.clone();
             status.set("Annulation...".into());
             is_error.set(false);
             wasm_bindgen_futures::spawn_local(async move {
@@ -532,8 +609,16 @@ fn App() -> Html {
 
     let status_class = if *is_error { "error" } else { "" };
 
+    // Textes de l'interface depuis la configuration runtime (replis par
+    // defaut si absents de [ui]).
+    let cfg = (*runtime_config).clone();
+    let ui_texts = cfg.as_ref().map(|config| config.ui.clone()).unwrap_or_default();
+    let text = move |key: &str, fallback: &str| ui_text(&ui_texts, key, fallback);
+
     // Vue formulaire: un creneau est selectionne, on demande la description.
-    let content = if let Some((date, slot)) = &*selected {
+    let content = if cfg.is_none() {
+        html! { <p>{ "Chargement de la configuration..." }</p> }
+    } else if let Some((date, slot)) = &*selected {
         html! {
             <>
                 <h2>{ format!("Créneau du {} à {}", format_display_date(&date), slot.start_at) }</h2>
@@ -547,12 +632,12 @@ fn App() -> Html {
                 <p class={status_class}>{ (*status).clone() }</p>
                 <div class="booking-form">
                     <label for="description">
-                        { option_env!("SAV_UI_DESCRIPTION_LABEL").unwrap_or("Décrivez le problème :") }
+                        { text("description_label", "Décrivez le problème :") }
                     </label>
                     <textarea
                         id="description"
                         rows="4"
-                        placeholder={ option_env!("SAV_UI_PLACEHOLDER").unwrap_or("Problème de connexion au boîtier...") }
+                        placeholder={ text("placeholder", "Problème de connexion au boîtier...") }
                         value={(*description).clone()}
                         oninput={on_description_input}
                     />
@@ -571,12 +656,16 @@ fn App() -> Html {
     else if let Some(booking) = &*next_booking {
         let on_cancel = {
             let cancel_booking = cancel_booking.clone();
+            let runtime_config = runtime_config.clone();
             Callback::from(move |_| {
-                // Confirmation avant l'annulation effective.
-                let message = option_env!("SAV_UI_CANCEL_CONFIRM")
-                    .unwrap_or("Annuler votre rendez-vous ?");
+                // Confirmation avant l'annulation effective (message
+                // configurable via [ui] cancel_confirm).
+                let message = (*runtime_config)
+                    .as_ref()
+                    .map(|config| ui_text(&config.ui, "cancel_confirm", "Annuler votre rendez-vous ?"))
+                    .unwrap_or_else(|| "Annuler votre rendez-vous ?".to_string());
                 let confirmed = web_sys::window()
-                    .map(|window| window.confirm_with_message(message).unwrap_or(false))
+                    .map(|window| window.confirm_with_message(&message).unwrap_or(false))
                     .unwrap_or(true);
                 if confirmed {
                     cancel_booking.emit(());
@@ -700,7 +789,7 @@ fn App() -> Html {
         <div class="sav-overlay" onclick={close_modal.reform(|_| ())}>
             <div class="sav-modal" role="dialog" aria-modal="true" onclick={swallow_click}>
                 <div class="sav-modal-header">
-                    <h1>{ option_env!("SAV_UI_TITLE").unwrap_or("SAV - Rendez-vous") }</h1>
+                    <h1>{ (*runtime_config).as_ref().map(|config| ui_text(&config.ui, "title", "SAV - Rendez-vous")).unwrap_or_else(|| "SAV - Rendez-vous".to_string()) }</h1>
                     <button class="sav-close" aria-label="Fermer" onclick={close_modal.reform(|_| ())}>
                         { "×" }
                     </button>
@@ -727,7 +816,9 @@ pub fn run_app() {
 
 #[wasm_bindgen]
 pub async fn smoke_list_slots() -> Result<JsValue, JsValue> {
-    let slots = SavClient::from_build_config()
+    let slots = SavClient::from_runtime_config()
+        .await
+        .map_err(|e| JsValue::from_str(&e))?
         .week_slots()
         .await
         .map_err(|e| JsValue::from_str(&e))?;
@@ -745,7 +836,9 @@ pub async fn smoke_book(
     description: String,
     slot_id: String,
 ) -> Result<JsValue, JsValue> {
-    let booking = SavClient::from_build_config()
+    let booking = SavClient::from_runtime_config()
+        .await
+        .map_err(|e| JsValue::from_str(&e))?
         .book(name, email, description, slot_id)
         .await
         .map_err(|e| JsValue::from_str(&e))?;

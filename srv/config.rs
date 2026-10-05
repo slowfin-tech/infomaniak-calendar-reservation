@@ -7,7 +7,7 @@
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 // --- Modeles ---
 
@@ -36,16 +36,24 @@ impl Default for ServerConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct UiConfig {
     /// Titre affiche par l'interface.
     pub title: String,
+    /// Toutes les autres cles texte de [ui] (placeholder,
+    /// description_label, cancel_confirm, ...), servies telles quelles
+    /// a l'UI via GET /api/config.
+    #[serde(flatten)]
+    pub texts: std::collections::BTreeMap<String, String>,
 }
 
 impl Default for UiConfig {
     fn default() -> Self {
-        UiConfig { title: "SAV - Rendez-vous".to_string() }
+        UiConfig {
+            title: "SAV - Rendez-vous".to_string(),
+            texts: std::collections::BTreeMap::new(),
+        }
     }
 }
 
@@ -173,6 +181,8 @@ mod tests {
 
             [ui]
             title = "Mon SAV"
+            placeholder = "Decrivez le probleme"
+            cancel_confirm = "Confirmer ?"
 
             [caldav]
             url = "https://caldav.example.com/"
@@ -195,6 +205,8 @@ mod tests {
 
         assert_eq!(config.server.port, 9090);
         assert_eq!(config.ui.title, "Mon SAV");
+        // Les autres cles [ui] sont capturees telles quelles.
+        assert_eq!(config.ui.texts.get("placeholder").map(String::as_str), Some("Decrivez le probleme"));
         assert_eq!(config.caldav.url, "https://caldav.example.com/");
         assert_eq!(config.infomaniak.calendar_id, 42);
         assert_eq!(config.slots.duration_minutes, Some(45));
