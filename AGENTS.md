@@ -49,6 +49,7 @@ Un fichier absent est toléré (valeurs par défaut) ; un fichier invalide fait 
 |---------|-----|-------------|--------|
 | `[server]` | `port` | Port d'écoute | `8080` |
 | `[ui]` | `title` | Titre affiché par l'interface (injecté au build du module wasm) | `"SAV - Rendez-vous"` |
+| `[ui]` | `placeholder`, `description_label`, `cancel_confirm`, ... | Textes de l'interface — **toute clé de `[ui]` est injectée au build du module wasm** sous la forme `SAV_UI_<CLÉ>` (lue via `option_env!`, défaut dans le code si absente) | défauts dans `ui/src/lib.rs` |
 | `[caldav]` | `url` | URL de base du serveur CalDAV | `https://sync.infomaniak.com/` |
 | `[caldav]` | `calendar_uri` | Chemin du calendar | — |
 | `[infomaniak]` | `calendar_id` | ID du calendar Infomaniak où créer les événements | — |
@@ -57,6 +58,8 @@ Un fichier absent est toléré (valeurs par défaut) ; un fichier invalide fait 
 | `[slots]` | `min_delay_minutes` | Délai minimum avant de pouvoir réserver | `0` |
 | `[slots.periods]` | `mon`…`sun` | Périodes par jour (`["HH:MM-HH:MM", ...]`) | tous les jours `10:00-12:00` et `14:00-16:00` |
 | `[booking]` | `description_template` | Modèle de la description envoyée à kMeet — placeholders `{description}`, `{email}`, `{name}`, `{start}`, `{end}` | `"{description}\n\nContact: {email}"` |
+| `[email]` | `sender` | Expéditeur de l'email de confirmation (vide = pas d'email) | — |
+| `[email]` | `subject` / `body` | Modèles de l'email — placeholders `{name}`, `{email}`, `{description}`, `{start}`, `{end}`, `{link}` | défauts dans `srv/email.rs` |
 
 **Sémantique de `[slots.periods]`** : si la section est **absente**, périodes par défaut
 pour tous les jours ; si elle est **présente**, elle remplace complètement les valeurs
@@ -69,6 +72,8 @@ par défaut et les jours non listés sont **fermés** (aucun créneau).
 | `CALDAV_LOGIN` | Identifiant de connexion CalDAV |
 | `CALDAV_PASSWORD` | Mot de passe CalDAV |
 | `KMEET_API_TOKEN` | Token Bearer pour `api.infomaniak.com` |
+| `SMTP_USER` / `SMTP_PASSWORD` | Identifiants SMTP pour l'email de confirmation |
+| `SMTP_SEND_URL` / `SMTP_SEND_PORT` | Hôte et port SMTP (STARTTLS, défaut 587) |
 | `SAV_API_KEY` | Clé d'API exigée sur tous les endpoints (`Authorization: Bearer <clé>`) |
 
 ---
@@ -210,6 +215,7 @@ La grille des débuts de créneaux est alignée sur le début de chaque période
 **Notes :**
 - L'événement est créé avec le titre `SAV - {email}`, la description construite depuis `[booking] description_template` (placeholders `{description}`, `{email}`, `{name}`, `{start}`, `{end}`), timezone `Europe/Zurich`
 - Le client est ajouté en participant (`attendees` : `address` = email, `organizer: false`, `name` = nom du client, `state: "NEEDS-ACTION"`) — il reçoit l'invitation
+- Un **email de confirmation** est envoyé au client via SMTP (`[email]` de config.toml + secrets SMTP_* du `.env`) : meilleur effort, un échec SMTP est tracé sur stderr mais n'annule pas la réservation
 - Anti double-réservation : le `slot_id` est « claimé » atomiquement en mémoire (`Mutex<HashSet>`) pendant la vérification CalDAV + la création de l'événement ; une requête concurrente sur le même slot reçoit `409` immédiatement
 - Limite du verrou : il est en mémoire du process, donc valable pour une instance unique du serveur. Pour plusieurs instances (ou un redémarrage), il faudrait un verrou partagé (Redis, ou table SQL avec contrainte d'unicité sur `slot_id`)
 
@@ -225,10 +231,13 @@ La grille des débuts de créneaux est alignée sur le début de chaque période
   "next_booking": {
     "slot_id": "202610031400",
     "start": "2026-10-03 14:00:00",
-    "end": "2026-10-03 14:30:00"
+    "end": "2026-10-03 14:30:00",
+    "link": "https://kmeet.infomaniak.com/room123"
   }
 }
 ```
+
+Le champ `link` (lien de la salle visio) est extrait de la description ou du lieu de l'événement calendar ; il est omis si l'événement n'en porte pas. L'UI l'affiche comme bouton « Rejoindre la visio ».
 
 **Réponse (aucun rendez-vous) :** `{ "next_booking": null }`
 

@@ -26,6 +26,9 @@ pub struct Slot {
 #[derive(Debug, Serialize)]
 pub struct SlotsResponse {
     pub slots_by_date: BTreeMap<String, Vec<Slot>>,
+    /// Duree d'un creneau en minutes - permet a l'UI de detecter les pauses
+    /// entre periodes (trou superieur a la duree d'un creneau).
+    pub duration_minutes: i64,
 }
 
 /// Configuration des creneaux.
@@ -212,7 +215,7 @@ pub async fn get_week_slots(caldav: &CalDavConfig, slots: &SlotsConfig) -> Slots
         date += Duration::days(1);
     }
 
-    SlotsResponse { slots_by_date }
+    SlotsResponse { slots_by_date, duration_minutes: slots.duration_minutes }
 }
 
 #[cfg(test)]
@@ -340,6 +343,9 @@ mod tests {
             start: date.and_hms_opt(h1, m1, 0).unwrap(),
             end: date.and_hms_opt(h2, m2, 0).unwrap(),
             uid: Some("uid-1".to_string()),
+            meet_url: None,
+            description: None,
+            location: None,
         };
 
         // Evenement a cheval sur le debut du slot -> booked.

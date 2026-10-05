@@ -55,7 +55,31 @@
 
 .sav-app .day { margin-top: 1rem; }
 .sav-app .day h3 { margin-bottom: 0.25rem; font-size: 1rem; }
-.sav-app .slots { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.sav-app .slots { display: flex; flex-wrap: wrap; gap: 0.5rem; justify-content: center; align-items: center; }
+/* Marqueur de pause entre deux periodes: separateur vertical inline, de
+   la meme hauteur que les creneaux, tout reste sur une ligne (ecran large). */
+.sav-app .break {
+  flex: 0 0 auto;
+  align-self: stretch;
+  box-sizing: border-box;
+  width: 10px;
+  border-radius: 4px;
+  background: #ccc;
+  border: 1px solid #999;
+}
+/* En mobile: le marqueur devient un trait pleine largeur et force les
+   periodes sur des lignes separees. */
+@media (max-width: 700px) {
+  .sav-app .break {
+    flex-basis: 100%;
+    width: auto;
+    height: 1px;
+    border-radius: 0;
+    background: #ddd;
+    border: none;
+    margin: 0.4rem 0;
+  }
+}
 .sav-app .slot {
   border: 1px solid #2a7;
   border-radius: 6px;
@@ -95,8 +119,31 @@
   box-shadow: 0 2px 8px rgba(23, 133, 90, 0.25);
 }
 
-.sav-app .actions { margin-top: 0.75rem; display: flex; gap: 0.5rem; }
+.sav-app .actions { margin-top: 0.75rem; display: flex; gap: 0.5rem; align-items: center; }
 .sav-app .actions .primary { background: #17855a; color: white; border: 1px solid #17855a; }
+/* Vue rendez-vous: le bouton d'annulation est aligne en bas a droite. */
+.sav-app .actions.appointment-actions { justify-content: flex-end; margin-top: 1.5rem; }
+/* Lien "Rejoindre la visio": jaune-orange clair, avec picto camera video. */
+.sav-app a.visio-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  border-radius: 8px;
+  padding: 0.5rem 1rem;
+  cursor: pointer;
+  font-size: 1rem;
+  background: #f8c34c;
+  color: #5c4300;
+  border: 1px solid #e0a92b;
+  text-decoration: none;
+  font-weight: 600;
+  transition: box-shadow 0.15s ease, background-color 0.15s ease;
+}
+.sav-app a.visio-link:hover {
+  box-shadow: 0 2px 8px rgba(240, 181, 47, 0.5);
+  background: #f0b52f;
+}
+.sav-app a.visio-link svg { flex: 0 0 auto; }
 .sav-app .actions button:not(.primary) { background: white; border: 1px solid #999; }
 .sav-app .actions button.danger { background: #c0392b; color: white; border: 1px solid #c0392b; }
 .sav-app .actions button.danger:hover { box-shadow: 0 2px 8px rgba(192, 57, 43, 0.4); }

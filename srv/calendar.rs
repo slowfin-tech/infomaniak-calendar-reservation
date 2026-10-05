@@ -26,12 +26,18 @@ pub struct CalendarResponse {
 
 /// Evenement brut parsé depuis l'ICS, avant formatage.
 /// `uid` permet de supprimer l'evenement via CalDAV (DELETE {uid}.ics).
+/// `meet_url` est l'URL de la salle visio, portee par la propriete ICS
+/// dediee X-INFOMANIAK-MEET-ROOM-URL.
 #[derive(Debug, Clone)]
 pub struct RawEvent {
     pub summary: String,
     pub start: NaiveDateTime,
     pub end: NaiveDateTime,
     pub uid: Option<String>,
+    /// URL de la salle visio (propriete X-INFOMANIAK-MEET-ROOM-URL).
+    pub meet_url: Option<String>,
+    pub description: Option<String>,
+    pub location: Option<String>,
 }
 
 // --- CalDAV Configuration ---
@@ -110,6 +116,9 @@ fn expand_recurring_event(
             start,
             end,
             uid: uid.clone(),
+            meet_url: None,
+            description: None,
+            location: None,
         });
     }
 
@@ -195,6 +204,9 @@ fn expand_recurring_event(
                     start: new_start,
                     end: new_start + dur,
                     uid: uid.clone(),
+                    meet_url: None,
+                    description: None,
+                    location: None,
                 });
             }
         }
@@ -230,6 +242,16 @@ fn parse_ics_content(ics_content: &str, range_start: NaiveDate, range_end: Naive
                 });
 
                 let uid = event.get_property("UID").and_then(|p| p.value.clone());
+                let description = event.get_property("DESCRIPTION").and_then(|p| p.value.clone());
+                let location = event.get_property("LOCATION").and_then(|p| p.value.clone());
+                // Propriete dediee d'Infomaniak pour l'URL de la salle visio
+                // (lookup insensible a la casse, get_property etant exact).
+                let meet_url = event
+                    .properties
+                    .iter()
+                    .find(|p| p.name.eq_ignore_ascii_case("X-INFOMANIAK-MEET-ROOM-URL"))
+                    .and_then(|p| p.value.clone())
+                    .filter(|url| !url.is_empty());
 
                 if let Some(rrule) = extract_rrule(&event) {
                     let expanded = expand_recurring_event(summary, start, end, uid, &rrule, range_start, range_end);
@@ -242,6 +264,9 @@ fn parse_ics_content(ics_content: &str, range_start: NaiveDate, range_end: Naive
                             start,
                             end,
                             uid,
+                            meet_url,
+                            description,
+                            location,
                         });
                     }
                 }

@@ -13,11 +13,12 @@ partage aucun code avec le serveur et communique uniquement via son API HTTP
 |---|---|---|
 | `SAV_API_KEY` | variable d'environnement, puis `SAV_API_KEY=` du `.env` du repo | — |
 | `SAV_URL` | variable d'environnement, puis `SAV_URL=` du `.env` | `http://localhost:8080` |
-| `SAV_TITLE` | `title` de la section `[ui]` du `config.toml` du repo, puis variable d'environnement | `SAV - Rendez-vous` |
+| `SAV_UI_<CLÉ>` | chaque clé de la section `[ui]` du `config.toml` (title, placeholder, description_label, cancel_confirm, ...) | défauts dans le code |
 
 **`SAV_URL=` vide** (dans le `.env`) signifie *même origine au runtime* : le
 module appelle l'API sur l'origine de la page — le cas du conteneur Docker qui
-sert l'UI et l'API (`http://localhost:8080/`).
+sert l'UI et l'API (`http://localhost:8080/`). **Toute nouvelle clé `[ui]` dans
+`config.toml` est automatiquement injectée** au prochain build du module.
 
 La page n'a donc rien à configurer. Attention : la clé est lisible dans le
 `.wasm` — elle doit rester dédiée à ce module et révocable. Le titre

@@ -20,6 +20,7 @@ pub struct AppConfig {
     pub infomaniak: InfomaniakSettings,
     pub slots: SlotsConfigToml,
     pub booking: BookingConfig,
+    pub email: EmailConfig,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -105,6 +106,28 @@ pub struct BookingConfig {
 impl Default for BookingConfig {
     fn default() -> Self {
         BookingConfig { description_template: None }
+    }
+}
+
+/// Section [email]: envoi d'un email de confirmation apres une reservation.
+/// `sender` vide (section absente) = pas d'email. Les identifiants SMTP
+/// (secrets) restent dans le .env: SMTP_USER, SMTP_PASSWORD,
+/// SMTP_SEND_URL, SMTP_SEND_PORT.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct EmailConfig {
+    /// Adresse de l'expediteur (ex: "sav@slowfintech.com").
+    pub sender: String,
+    /// Modele d'objet; placeholders: {name}, {email}, {description},
+    /// {start}, {end}, {link}.
+    pub subject: Option<String>,
+    /// Modele de corps (texte brut); memes placeholders.
+    pub body: Option<String>,
+}
+
+impl Default for EmailConfig {
+    fn default() -> Self {
+        EmailConfig { sender: String::new(), subject: None, body: None }
     }
 }
 

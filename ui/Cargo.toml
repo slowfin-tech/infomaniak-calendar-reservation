@@ -22,3 +22,6 @@ web-sys = { version = "0.3", features = ["Window", "Location", "Document", "Elem
 
 [dev-dependencies]
 wasm-bindgen-test = "0.3"
+
+[build-dependencies]
+toml = "1"

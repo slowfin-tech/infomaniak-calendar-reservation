@@ -7,6 +7,7 @@ use serde_json::json;
 mod booking;
 mod calendar;
 mod config;
+mod email;
 mod slots;
 use calendar::{get_sliding_week_calendar_events, CalDavConfig};
 

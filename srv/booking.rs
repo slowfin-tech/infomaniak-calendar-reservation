@@ -207,6 +207,10 @@ pub struct NextBooking {
     pub slot_id: String,
     pub start: String,
     pub end: String,
+    /// Lien de la salle visio (extrait de la description/lieu de
+    /// l'evenement calendar), s'il y figure.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub link: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -224,6 +228,24 @@ fn is_sav_event_for(summary: &str, email: &str) -> bool {
     rest.trim() == email
 }
 
+/// Extrait le lien de la salle visio depuis le contenu d'un evenement
+/// calendar (description ou lieu): premiere URL https://, coupee aux
+/// premiers separateurs. Le backslash est un separateur: l'ICS encode les
+/// retours a la ligne en "\n" litteraux.
+fn extract_visio_link(content: &str) -> Option<String> {
+    let start = content.find("https://")?;
+    let rest = &content[start..];
+    let end = rest
+        .find(|c: char| c.is_whitespace() || c == '<' || c == '"' || c == ')' || c == '\\')
+        .unwrap_or(rest.len());
+    let url = rest[..end].trim_end_matches(|c: char| !c.is_alphanumeric());
+    // Il faut un chemin derriere le scheme (rejette "https://" seul).
+    if url.len() <= "https://".len() {
+        return None;
+    }
+    Some(url.to_string())
+}
+
 /// Retourne le prochain rendez-vous SAV (evenement futur le plus proche)
 /// de cet utilisateur dans la semaine glissante.
 fn find_next_booking(
@@ -236,10 +258,26 @@ fn find_next_booking(
         .iter()
         .filter(|event| is_sav_event_for(&event.summary, &email) && event.start > now)
         .min_by_key(|event| event.start)
-        .map(|event| NextBooking {
-            slot_id: event.start.format("%Y%m%d%H%M").to_string(),
-            start: event.start.format("%Y-%m-%d %H:%M:%S").to_string(),
-            end: event.end.format("%Y-%m-%d %H:%M:%S").to_string(),
+        .map(|event| {
+            // Lien visio: propriete dediee X-INFOMANIAK-MEET-ROOM-URL en
+            // priorite, sinon extraction depuis description/lieu (anciens
+            // evenements).
+            let link = event
+                .meet_url
+                .clone()
+                .or_else(|| {
+                    event
+                        .description
+                        .as_deref()
+                        .and_then(extract_visio_link)
+                })
+                .or_else(|| event.location.as_deref().and_then(extract_visio_link));
+            NextBooking {
+                slot_id: event.start.format("%Y%m%d%H%M").to_string(),
+                start: event.start.format("%Y-%m-%d %H:%M:%S").to_string(),
+                end: event.end.format("%Y-%m-%d %H:%M:%S").to_string(),
+                link,
+            }
         })
 }
 
@@ -387,15 +425,41 @@ pub async fn create_booking(req: HttpRequest, body: web::Json<BookingRequest>) -
         )
         .await
         {
-            Ok(event) => HttpResponse::Created().json(BookingResponse {
-                slot_id: request.slot_id.clone(),
-                name: request.name.trim().to_string(),
-                email: request.email.trim().to_string(),
-                description: request.description.trim().to_string(),
-                start: slot_start.format("%Y-%m-%d %H:%M:%S").to_string(),
-                end: slot_end.format("%Y-%m-%d %H:%M:%S").to_string(),
-                event,
-            }),
+            Ok(event) => {
+                // Lien de la salle visio kMeet (hostname + room name),
+                // pour l'email de confirmation.
+                let link = match (
+                    event.get("hostname").and_then(|v| v.as_str()),
+                    event.get("name").and_then(|v| v.as_str()),
+                ) {
+                    (Some(hostname), Some(room)) => format!("https://{}/{}", hostname, room),
+                    _ => String::new(),
+                };
+
+                // Email de confirmation au client: meilleur effort, un echec
+                // n'annule pas la reservation.
+                let email_data = crate::email::EmailData {
+                    to: request.email.trim().to_string(),
+                    name: request.name.trim().to_string(),
+                    description: request.description.trim().to_string(),
+                    start: slot_start.format("%Y-%m-%d %H:%M:%S").to_string(),
+                    end: slot_end.format("%Y-%m-%d %H:%M:%S").to_string(),
+                    link,
+                };
+                if let Err(e) = crate::email::send_confirmation(&email_data).await {
+                    eprintln!("[email] confirmation non envoyee: {}", e);
+                }
+
+                HttpResponse::Created().json(BookingResponse {
+                    slot_id: request.slot_id.clone(),
+                    name: request.name.trim().to_string(),
+                    email: request.email.trim().to_string(),
+                    description: request.description.trim().to_string(),
+                    start: slot_start.format("%Y-%m-%d %H:%M:%S").to_string(),
+                    end: slot_end.format("%Y-%m-%d %H:%M:%S").to_string(),
+                    event,
+                })
+            }
             Err(e) => HttpResponse::BadGateway().json(json!({"error": e})),
         }
     }
@@ -460,25 +524,37 @@ mod tests {
         let at = |h: u32| date.and_hms_opt(h, 0, 0).unwrap();
         let now = at(9);
 
-        let event = |summary: &str, h1: u32, h2: u32, uid: Option<&str>| RawEvent {
+        let event = |summary: &str, h1: u32, h2: u32, uid: Option<&str>, description: Option<&str>| RawEvent {
             summary: summary.to_string(),
             start: at(h1),
             end: at(h2),
             uid: uid.map(|u| u.to_string()),
+            meet_url: None,
+            description: description.map(|d| d.to_string()),
+            location: None,
         };
 
         let events = vec![
-            event("SAV - autre@domain.com", 10, 11, Some("uid-autre")), // autre utilisateur
-            event("SAV - client@domain.com", 15, 16, Some("uid-tardif")), // plus tard
-            event("SAV - client@domain.com", 11, 12, Some("uid-proche")), // doit gagner
-            event("SAV - client@domain.com", 8, 9, Some("uid-passe")), // passe: ignore
-            event("RDV equipe", 10, 11, None), // hors SAV
+            event("SAV - autre@domain.com", 10, 11, Some("uid-autre"), None), // autre utilisateur
+            event("SAV - client@domain.com", 15, 16, Some("uid-tardif"), None), // plus tard
+            event("SAV - client@domain.com", 11, 12, Some("uid-proche"), Some("Rendez-vous\nLien: https://kmeet.infomaniak.com/room123.")), // doit gagner
+            event("SAV - client@domain.com", 8, 9, Some("uid-passe"), None), // passe: ignore
+            event("RDV equipe", 10, 11, None, None), // hors SAV
         ];
 
         let next = find_next_booking(&events, "Client@Domain.com ", now).unwrap();
         assert_eq!(next.slot_id, "202610051100");
         assert_eq!(next.start, "2026-10-05 11:00:00");
         assert_eq!(next.end, "2026-10-05 12:00:00");
+        // Lien visio extrait de la description (pas de propriete dediee).
+        assert_eq!(next.link.as_deref(), Some("https://kmeet.infomaniak.com/room123"));
+
+        // La propriete dediee X-INFOMANIAK-MEET-ROOM-URL est prioritaire
+        // sur l'URL trouvee dans la description.
+        let mut with_url = events.clone();
+        with_url[2].meet_url = Some("https://kmeet.infomaniak.com/room-officiel".to_string());
+        let next = find_next_booking(&with_url, "client@domain.com", now).unwrap();
+        assert_eq!(next.link.as_deref(), Some("https://kmeet.infomaniak.com/room-officiel"));
 
         // UID du meme evenement (pour l'annulation).
         assert_eq!(find_next_booking_uid(&events, "client@domain.com", now).as_deref(), Some("uid-proche"));
@@ -487,6 +563,25 @@ mod tests {
         let none = find_next_booking(&events, "inconnu@domain.com", now);
         assert!(none.is_none());
         assert!(find_next_booking_uid(&events, "inconnu@domain.com", now).is_none());
+    }
+
+    #[test]
+    fn lien_visio_extrait_depuis_description_ou_lieu() {
+        assert_eq!(
+            extract_visio_link("Lien: https://kmeet.infomaniak.com/room123."),
+            Some("https://kmeet.infomaniak.com/room123".to_string())
+        );
+        assert_eq!(
+            extract_visio_link("a https://meet.example.com/abc/def) suite"),
+            Some("https://meet.example.com/abc/def".to_string())
+        );
+        // ICS: les retours a la ligne sont echappes en "\n" litteraux.
+        assert_eq!(
+            extract_visio_link("https://kmeet.infomaniak.com/room\\n\\n/*----*/"),
+            Some("https://kmeet.infomaniak.com/room".to_string())
+        );
+        assert_eq!(extract_visio_link("pas d url ici"), None);
+        assert_eq!(extract_visio_link("https://"), None);
     }
 
     #[test]

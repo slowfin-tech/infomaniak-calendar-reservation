@@ -23,9 +23,13 @@ pub struct Slot {
     pub booked: bool,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 struct SlotsResponse {
     slots_by_date: BTreeMap<String, Vec<Slot>>,
+    /// Duree d'un creneau en minutes (defaut 0 = inconnue: pas de
+    /// decoupage par pauses).
+    #[serde(default)]
+    duration_minutes: i64,
 }
 
 #[derive(Serialize)]
@@ -52,6 +56,9 @@ pub struct NextBooking {
     pub slot_id: String,
     pub start: String,
     pub end: String,
+    /// Lien de la salle visio (absent si l'evenement n'en porte pas).
+    #[serde(default)]
+    pub link: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -97,7 +104,7 @@ impl SavClient {
 
     /// Retourne tous les creneaux de la semaine, groupes par date, avec leur
     /// statut `booked` (l'affichage distingue libres / reserves).
-    pub(crate) async fn week_slots(&self) -> Result<BTreeMap<String, Vec<Slot>>, String> {
+    pub(crate) async fn week_slots(&self) -> Result<SlotsResponse, String> {
         let response = self.get("/api/slots").send().await.map_err(|e| format!("erreur reseau: {e}"))?;
 
         let status = response.status();
@@ -107,7 +114,7 @@ impl SavClient {
         }
 
         let slots: SlotsResponse = response.json().await.map_err(|e| format!("reponse illisible: {e}"))?;
-        Ok(slots.slots_by_date)
+        Ok(slots)
     }
 
     /// Reserve un slot pour le compte du client donne.
@@ -268,13 +275,54 @@ fn format_booking_datetime(raw: &str) -> String {
     }
 }
 
+// --- Decoupage des creneaux par pauses ---
+
+/// "14:30" -> 870 minutes depuis minuit.
+fn hm_to_minutes(hm: &str) -> Option<i64> {
+    let (hours, minutes) = hm.trim().split_once(':')?;
+    Some(hours.trim().parse::<i64>().ok()? * 60 + minutes.trim().parse::<i64>().ok()?)
+}
+
+/// Decoupe les creneaux d'une journee en blocs continus, separes par les
+/// pauses (trou superieur a la duree d'un creneau, ex: la pause du midi).
+pub(crate) fn slot_blocks(slots: &[Slot], duration_minutes: i64) -> Vec<Vec<Slot>> {
+    let mut blocks: Vec<Vec<Slot>> = Vec::new();
+    let mut prev_end: Option<i64> = None;
+
+    for slot in slots {
+        let start = hm_to_minutes(&slot.start_at);
+        // Trou apres le creneau precedent: nouvelle periode.
+        let is_break = matches!((start, prev_end), (Some(start), Some(prev_end))
+            if duration_minutes > 0 && prev_end < start);
+
+        match (blocks.last_mut(), is_break) {
+            (Some(_), true) => blocks.push(vec![slot.clone()]),
+            (Some(block), false) => block.push(slot.clone()),
+            (None, _) => blocks.push(vec![slot.clone()]),
+        }
+
+        prev_end = start.map(|start| {
+            if duration_minutes > 0 {
+                start + duration_minutes
+            } else {
+                start
+            }
+        });
+    }
+
+    blocks
+}
+
 // --- Composant Yew ---
 
 #[function_component]
 fn App() -> Html {
     let email = use_memo((), |_| config_value("email"));
     let name = use_memo((), |_| config_value("name").or_else(|| config_value("email")));
-    let slots = use_state(BTreeMap::new);
+    let slots = use_state(|| SlotsResponse {
+        slots_by_date: BTreeMap::new(),
+        duration_minutes: 0,
+    });
     let status = use_state(String::new);
     let is_error = use_state(|| false);
     // Creneau selectionne: (date, slot). Bascule la vue vers le formulaire.
@@ -498,11 +546,13 @@ fn App() -> Html {
                 }
                 <p class={status_class}>{ (*status).clone() }</p>
                 <div class="booking-form">
-                    <label for="description">{ "Décrivez le problème :" }</label>
+                    <label for="description">
+                        { option_env!("SAV_UI_DESCRIPTION_LABEL").unwrap_or("Décrivez le problème :") }
+                    </label>
                     <textarea
                         id="description"
                         rows="4"
-                        placeholder="Problème de connexion au boîtier..."
+                        placeholder={ option_env!("SAV_UI_PLACEHOLDER").unwrap_or("Problème de connexion au boîtier...") }
                         value={(*description).clone()}
                         oninput={on_description_input}
                     />
@@ -521,7 +571,17 @@ fn App() -> Html {
     else if let Some(booking) = &*next_booking {
         let on_cancel = {
             let cancel_booking = cancel_booking.clone();
-            Callback::from(move |_| cancel_booking.emit(()))
+            Callback::from(move |_| {
+                // Confirmation avant l'annulation effective.
+                let message = option_env!("SAV_UI_CANCEL_CONFIRM")
+                    .unwrap_or("Annuler votre rendez-vous ?");
+                let confirmed = web_sys::window()
+                    .map(|window| window.confirm_with_message(message).unwrap_or(false))
+                    .unwrap_or(true);
+                if confirmed {
+                    cancel_booking.emit(());
+                }
+            })
         };
         html! {
             <>
@@ -531,7 +591,28 @@ fn App() -> Html {
                 </div>
                 <p>{ "Un seul rendez-vous à la fois : il n'est pas possible d'en réserver un autre." }</p>
                 <p class={status_class}>{ (*status).clone() }</p>
-                <div class="actions">
+                // Lien vers la salle visio, quand l'evenement le porte.
+                if let Some(link) = &booking.link {
+                    <a class="visio-link" href={link.clone()} target="_blank" rel="noopener">
+                        // Picto camera video
+                        <svg
+                            xmlns="http://www.w3.org/2000/svg"
+                            width="16"
+                            height="16"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="2"
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                        >
+                            <path d="m23 7-7 5 7 5V7z" />
+                            <rect x="1" y="5" width="15" height="14" rx="2" ry="2" />
+                        </svg>
+                        { "Rejoindre la visio" }
+                    </a>
+                }
+                <div class="actions appointment-actions">
                     <button class="danger" onclick={on_cancel}>{ "Annuler le rendez-vous" }</button>
                 </div>
             </>
@@ -551,40 +632,54 @@ fn App() -> Html {
                 }
                 <p class={status_class}>{ (*status).clone() }</p>
                 {
-                    for (*slots).iter().filter(|(_, list)| !list.is_empty()).map(|(date, list)| {
+                    for (*slots).slots_by_date.iter().filter(|(_, list)| !list.is_empty()).map(|(date, list)| {
+                        let blocks = slot_blocks(list, (*slots).duration_minutes);
+                        let block_count = blocks.len();
                         html! {
                             <div class="day">
                                 <h3>{ format_display_date(date) }</h3>
                                 <div class="slots">
-                                    { for list.iter().map(|slot| {
-                                        if slot.booked {
-                                            // Deja reserve: affiche, non cliquable.
-                                            html! {
-                                                <span class="slot booked">
-                                                    { slot.start_at.clone() }
-                                                </span>
-                                            }
-                                        } else {
-                                            // Clic sur le creneau: bascule vers le formulaire.
-                                            let onclick = {
-                                                let selected = selected.clone();
-                                                let description = description.clone();
-                                                let status = status.clone();
-                                                let is_error = is_error.clone();
-                                                let date = date.clone();
-                                                let slot = slot.clone();
-                                                Callback::from(move |_| {
-                                                    selected.set(Some((date.clone(), slot.clone())));
-                                                    description.set(String::new());
-                                                    status.set(String::new());
-                                                    is_error.set(false);
-                                                })
-                                            };
-                                            html! {
-                                                <span class="slot clickable" {onclick}>
-                                                    { slot.start_at.clone() }
-                                                </span>
-                                            }
+                                    { for blocks.into_iter().enumerate().map(|(index, block)| {
+                                        html! {
+                                            <>
+                                                { for block.iter().map(|slot| {
+                                                    if slot.booked {
+                                                        // Deja reserve: affiche, non cliquable.
+                                                        html! {
+                                                            <span class="slot booked">
+                                                                { slot.start_at.clone() }
+                                                            </span>
+                                                        }
+                                                    } else {
+                                                        // Clic sur le creneau: bascule vers le formulaire.
+                                                        let onclick = {
+                                                            let selected = selected.clone();
+                                                            let description = description.clone();
+                                                            let status = status.clone();
+                                                            let is_error = is_error.clone();
+                                                            let date = date.clone();
+                                                            let slot = slot.clone();
+                                                            Callback::from(move |_| {
+                                                                selected.set(Some((date.clone(), slot.clone())));
+                                                                description.set(String::new());
+                                                                status.set(String::new());
+                                                                is_error.set(false);
+                                                            })
+                                                        };
+                                                        html! {
+                                                            <span class="slot clickable" {onclick}>
+                                                                { slot.start_at.clone() }
+                                                            </span>
+                                                        }
+                                                    }
+                                                })}
+                                                // Marqueur de pause entre deux periodes:
+                                                // carre gris en ligne (ecran large), trait
+                                                // + retour a la ligne en mobile (voir CSS).
+                                                if index + 1 < block_count {
+                                                    <span class="break" />
+                                                }
+                                            </>
                                         }
                                     })}
                                 </div>
@@ -605,7 +700,7 @@ fn App() -> Html {
         <div class="sav-overlay" onclick={close_modal.reform(|_| ())}>
             <div class="sav-modal" role="dialog" aria-modal="true" onclick={swallow_click}>
                 <div class="sav-modal-header">
-                    <h1>{ env!("SAV_TITLE") }</h1>
+                    <h1>{ option_env!("SAV_UI_TITLE").unwrap_or("SAV - Rendez-vous") }</h1>
                     <button class="sav-close" aria-label="Fermer" onclick={close_modal.reform(|_| ())}>
                         { "×" }
                     </button>
@@ -638,7 +733,9 @@ pub async fn smoke_list_slots() -> Result<JsValue, JsValue> {
         .map_err(|e| JsValue::from_str(&e))?;
     // Objet JS simple (et non `Map`) pour Object.entries() cote script.
     let serializer = serde_wasm_bindgen::Serializer::new().serialize_maps_as_objects(true);
-    (&slots).serialize(&serializer).map_err(|e| JsValue::from_str(&e.to_string()))
+    (&slots.slots_by_date)
+        .serialize(&serializer)
+        .map_err(|e| JsValue::from_str(&e.to_string()))
 }
 
 #[wasm_bindgen]

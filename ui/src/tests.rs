@@ -72,10 +72,18 @@ fn parse_reponse_slots() {
 
 #[wasm_bindgen_test]
 fn config_build_presente() {
-    // build.rs doit avoir injecte la cle, l'URL et le titre (config.toml).
+    // build.rs doit avoir injecte la cle, l'URL et les textes [ui] de
+    // config.toml (SAV_UI_<CLE>).
     assert!(!env!("SAV_API_KEY").is_empty());
     assert!(!env!("SAV_URL").is_empty());
-    assert!(!env!("SAV_TITLE").is_empty());
+    assert!(!option_env!("SAV_UI_TITLE").unwrap_or("").is_empty());
+    // Le placeholder est defini dans config.toml.
+    assert!(!option_env!("SAV_UI_PLACEHOLDER").unwrap_or("").is_empty());
+    // Valeurs par defaut garanties hors config.
+    assert_eq!(
+        option_env!("SAV_UI_DESCRIPTION_LABEL").unwrap_or("Décrivez le problème :"),
+        "Décrivez le problème :"
+    );
 }
 
 #[wasm_bindgen_test]
@@ -103,6 +111,55 @@ fn base_url_meme_origine_quand_vide() {
     assert_eq!(resolve_base_url("http://localhost:8080/"), "http://localhost:8080");
     // Vide: origine de la page - absente en Node, repli localhost de dev.
     assert_eq!(resolve_base_url(""), "http://localhost:8080");
+}
+
+#[wasm_bindgen_test]
+fn blocs_separes_par_la_pause_du_midi() {
+    use crate::{slot_blocks, Slot};
+    let slot = |start_at: &str| Slot {
+        id: format!("20261005{}", start_at.replace(':', "")),
+        start_at: start_at.to_string(),
+        booked: false,
+    };
+    // Matin 10h-12h (4 creneaux de 30 min), apres-midi 14h-16h.
+    let day = vec![slot("10:00"), slot("10:30"), slot("11:00"), slot("11:30"), slot("14:00"), slot("14:30"), slot("15:00"), slot("15:30")];
+
+    let blocks = slot_blocks(&day, 30);
+    assert_eq!(blocks.len(), 2);
+    assert_eq!(blocks[0].len(), 4);
+    assert_eq!(blocks[0][3].start_at, "11:30");
+    assert_eq!(blocks[1].len(), 4);
+    assert_eq!(blocks[1][0].start_at, "14:00");
+}
+
+#[wasm_bindgen_test]
+fn trois_blocs_pour_trois_periodes() {
+    use crate::{slot_blocks, Slot};
+    let slot = |start_at: &str| Slot {
+        id: format!("20261005{}", start_at.replace(':', "")),
+        start_at: start_at.to_string(),
+        booked: false,
+    };
+    // Trois periodes: 9h-10h, 11h-12h, 14h-15h (creneaux de 60 min).
+    let day = vec![slot("09:00"), slot("11:00"), slot("14:00")];
+    let blocks = slot_blocks(&day, 60);
+    assert_eq!(blocks.len(), 3);
+    assert_eq!(blocks.iter().map(|b| b.len()).sum::<usize>(), 3);
+}
+
+#[wasm_bindgen_test]
+fn bloc_unique_sans_duree_connue() {
+    use crate::{slot_blocks, Slot};
+    let slot = |start_at: &str| Slot {
+        id: format!("20261005{}", start_at.replace(':', "")),
+        start_at: start_at.to_string(),
+        booked: false,
+    };
+    let day = vec![slot("10:00"), slot("14:00")];
+    // Duree inconnue (0): pas de decoupage, tout dans un bloc sans pause.
+    let blocks = slot_blocks(&day, 0);
+    assert_eq!(blocks.len(), 1);
+    assert_eq!(blocks[0].len(), 2);
 }
 
 #[wasm_bindgen_test]
@@ -137,7 +194,7 @@ async fn next_booking_parse_reponse() {
           Promise.resolve(globalThis.__respond(globalThis.__nextJson, 200, "http://localhost:8080/api/bookings/next"));
         "#,
         helpers = JS_HELPERS,
-        json = r#"{ "next_booking": { "slot_id": "202610031400", "start": "2026-10-03 14:00:00", "end": "2026-10-03 14:30:00" } }"#
+        json = r#"{ "next_booking": { "slot_id": "202610031400", "start": "2026-10-03 14:00:00", "end": "2026-10-03 14:30:00", "link": "https://kmeet.infomaniak.com/room123" } }"#
     ));
 
     let client = client_for_tests();
@@ -145,6 +202,8 @@ async fn next_booking_parse_reponse() {
     let next = next.expect("un rendez-vous doit etre trouve");
     assert_eq!(next.slot_id, "202610031400");
     assert_eq!(next.start, "2026-10-03 14:00:00");
+    // Lien visio present dans la reponse.
+    assert_eq!(next.link.as_deref(), Some("https://kmeet.infomaniak.com/room123"));
 
     // Cas sans rendez-vous: next_booking absent/null.
     let _restorer = stub_fetch(&format!(
@@ -157,6 +216,20 @@ async fn next_booking_parse_reponse() {
     ));
     let none = client.next_booking("client@domain.com").await.unwrap();
     assert!(none.is_none());
+
+    // Reponse sans champ link (serde skip): None.
+    let _restorer = stub_fetch(&format!(
+        r#"
+        {helpers}
+        globalThis.__noLinkJson = {json};
+        globalThis.fetch = (input) =>
+          Promise.resolve(globalThis.__respond(globalThis.__noLinkJson, 200, "http://localhost:8080/api/bookings/next"));
+        "#,
+        helpers = JS_HELPERS,
+        json = r#"{ "next_booking": { "slot_id": "202610031400", "start": "2026-10-03 14:00:00", "end": "2026-10-03 14:30:00" } }"#
+    ));
+    let without_link = client.next_booking("client@domain.com").await.unwrap().unwrap();
+    assert!(without_link.link.is_none());
 }
 
 // --- Tests reseau via stub fetch ---
@@ -219,12 +292,12 @@ async fn week_slots_via_fetch() {
     let slots = client.week_slots().await.expect("appel doit reussir");
 
     // Tous les creneaux sont conserves, reserves compris (affichage orange).
-    assert_eq!(slots["2026-10-01"].len(), 3);
-    assert_eq!(slots["2026-10-01"][0].id, "202610011000");
-    assert!(!slots["2026-10-01"][0].booked);
-    assert!(slots["2026-10-01"][1].booked);
-    assert!(slots["2026-10-02"].iter().all(|s| s.booked));
-    assert_eq!(slots["2026-10-03"][0].start_at, "14:00");
+    assert_eq!(slots.slots_by_date["2026-10-01"].len(), 3);
+    assert_eq!(slots.slots_by_date["2026-10-01"][0].id, "202610011000");
+    assert!(!slots.slots_by_date["2026-10-01"][0].booked);
+    assert!(slots.slots_by_date["2026-10-01"][1].booked);
+    assert!(slots.slots_by_date["2026-10-02"].iter().all(|s| s.booked));
+    assert_eq!(slots.slots_by_date["2026-10-03"][0].start_at, "14:00");
 
     let calls = js_sys::Array::from(&get(&js_sys::global(), "__requests"));
     assert_eq!(calls.length(), 1);
