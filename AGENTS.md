@@ -11,8 +11,14 @@ sav/
 ├── Cargo.toml           # Workspace monorepo + crate serveur (sav_server, sources dans srv/)
 ├── Cargo.lock           # Lockfile du workspace
 ├── config.toml          # Configuration non-secret (port, caldav, creneaux, titre...)
+├── .env.example         # Modèle de secrets (copier en .env)
 ├── Dockerfile           # Build multi-stage de l'image serveur (sav-server)
 ├── .dockerignore        # Exclusions du contexte Docker (target/, .env, ui/...)
+├── README.md            # Vue d'ensemble du projet
+├── CHANGELOG.md         # Historique des changements
+├── CONTRIBUTING.md      # Guide de contribution
+├── SECURITY.md          # Politique de sécurité
+├── CODE_OF_CONDUCT.md   # Code de conduite
 ├── AGENTS.md            # Ce fichier - documentation
 ├── srv/
 │   ├── main.rs          # Point d'entrée - serveur Actix
