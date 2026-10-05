@@ -1,0 +1,56 @@
+# Configuration du serveur SAV - tout ce qui n'est pas secret.
+# Les secrets (CALDAV_LOGIN, CALDAV_PASSWORD, KMEET_API_TOKEN, SAV_API_KEY)
+# restent dans le .env.
+# Champs optionnels: valeurs par défaut indiquées en commentaire.
+
+[server]
+# Port d'écoute (défaut: 8080)
+port = 8080
+
+[ui]
+# Titre affiché par l'interface (aussi utilisé par le module wasm à son build)
+title = "SAV - Rendez-vous"
+
+[caldav]
+# Serveur CalDAV (défaut: https://sync.infomaniak.com/)
+url = "https://sync.infomaniak.com/"
+calendar_uri = "/calendars/ND04237/f28b6a18-5cdd-410b-9cc4-ae95932ff536/"
+
+[infomaniak]
+# Calendar Infomaniak où créer les événements
+calendar_id = 2438834
+# Hostname kMeet pour les liens visio (sans scheme ni slash final)
+visio_base_url = "kmeet.infomaniak.com"
+
+[slots]
+# Durée des créneaux en minutes (défaut: 30)
+duration_minutes = 30
+# Délai minimum entre maintenant et le début d'un créneau pour le réserver,
+# en minutes (défaut: 0 = pas de délai)
+min_delay_minutes = 720
+
+# Périodes par jour de semaine (mon, tue, wed, thu, fri, sat, sun) au format
+# "HH:MM-HH:MM". Si la section est absente, tous les jours ont les périodes
+# par défaut (10:00-12:00 et 14:00-16:00). Si elle est présente, les jours non
+# listés sont fermés (aucun créneau).
+[slots.periods]
+mon = ["10:00-12:00", "14:00-16:00"]
+tue = ["10:00-12:00", "14:00-16:00"]
+wed = ["10:00-12:00", "14:00-16:00"]
+thu = ["10:00-12:00", "14:00-16:00"]
+fri = ["10:00-12:00", "14:00-16:00"]
+sat = []
+sun = []
+
+# Réservation
+[booking]
+# Modèle de la description envoyée à kMeet lors de la création de
+# l'événement. Placeholders: {description}, {email}, {name}, {start}, {end}.
+# Défaut: "{description}\n\nContact: {email}"
+# Exemple (chaîne multi-lignes TOML) :
+description_template = '''
+Rendez-vous SAV
+Problème : {description}
+Client : {email}
+Créneau : {start} -> {end}
+'''

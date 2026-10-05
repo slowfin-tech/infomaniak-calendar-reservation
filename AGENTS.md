@@ -8,33 +8,68 @@ Serveur Rust utilisant Actix-web pour exposer une API REST qui récupère les é
 
 ```
 sav/
-├── Cargo.toml           # Dépendances du projet
+├── Cargo.toml           # Workspace monorepo + crate serveur (sav_server, sources dans srv/)
+├── Cargo.lock           # Lockfile du workspace
+├── config.toml          # Configuration non-secret (port, caldav, creneaux, titre...)
+├── Dockerfile           # Build multi-stage de l'image serveur (sav-server)
+├── .dockerignore        # Exclusions du contexte Docker (target/, .env, ui/...)
 ├── AGENTS.md            # Ce fichier - documentation
-└── src/
-    ├── main.rs          # Point d'entrée - serveur Actix
-    ├── booking.rs       # Module réservation - POST /api/bookings, API Infomaniak kMeet
-    ├── calendar.rs       # Module CalDAV - logique métier
-    └── slots.rs          # Module slots - créneaux de SAV de 30 min
+├── srv/
+│   ├── main.rs          # Point d'entrée - serveur Actix
+│   ├── config.rs        # Configuration non-secret (config.toml, global())
+│   ├── booking.rs       # Module réservation - POST /api/bookings, API Infomaniak kMeet
+│   ├── calendar.rs       # Module CalDAV - logique métier
+│   └── slots.rs          # Module slots - créneaux de SAV de 30 min
+└── ui/                   # Interface SAV en wasm (crate indépendante sav_ui, voir ui/README.md)
+    ├── Cargo.toml        # Crate wasm (cdylib, Yew)
+    ├── build.rs          # Injecte SAV_API_KEY / SAV_URL au build (depuis .env ou l'environnement)
+    ├── src/lib.rs        # Client API + application Yew
+    ├── src/tests.rs      # Tests wasm-bindgen-test (wasm-pack test --node)
+    ├── static/           # Bundle déployable: sav.js (initializer type GA), sav.css, pkg/, page de démo
+    ├── scripts/smoke.mjs  # Test manuel du module contre le serveur réel
+    └── pkg/              # Sortie wasm-pack (générée)
 ```
+
+Le monorepo contient deux crates qui ne partagent **aucun code** : l'UI
+(`ui/`) discute avec le serveur uniquement via son API HTTP. Le build de
+l'UI se fait avec `wasm-pack build --target web` depuis `ui/` (voir
+`ui/README.md`) ; `cargo build` à la racine ne compile que le serveur
+(`default-members`).
 
 ---
 
 ## Configuration
 
-### Variables d'environnement requises
+### `config.toml` — tout ce qui n'est pas secret
 
-| Variable | Description | Exemple |
-|----------|-------------|---------|
-| `CALDAV_URL` | URL base du serveur CalDAV | `https://sync.infomaniak.com/` |
-| `CALDAV_CALENDAR_URI` | Chemin du calendar | `/caldav/calendar/abc123/` |
-| `CALDAV_LOGIN` | Identifiant de connexion | `user@domain.com` |
-| `CALDAV_PASSWORD` | Mot de passe | `********` |
-| `SAV_API_KEY` | Clé d'API exigée sur tous les endpoints (`Authorization: Bearer <clé>`) | hex aléatoire |
-| `KMEET_API_TOKEN` | Token Bearer pour `api.infomaniak.com` | `********` |
-| `KCALENDAR_ID` | ID du calendar Infomaniak où créer l'événement | `2438` |
-| `VISIO_BASE_URL` | Hostname kMeet | `kmeet.infomaniak.com` |
+Chargé au démarrage (chemin par défaut `config.toml`, surchargeable via `CONFIG_PATH`).
+Un fichier absent est toléré (valeurs par défaut) ; un fichier invalide fait échouer le démarrage.
 
-**Optionnel :** `CALDAV_URL` a une valeur par défaut : `https://sync.infomaniak.com/`
+| Section | Clé | Description | Défaut |
+|---------|-----|-------------|--------|
+| `[server]` | `port` | Port d'écoute | `8080` |
+| `[ui]` | `title` | Titre affiché par l'interface (injecté au build du module wasm) | `"SAV - Rendez-vous"` |
+| `[caldav]` | `url` | URL de base du serveur CalDAV | `https://sync.infomaniak.com/` |
+| `[caldav]` | `calendar_uri` | Chemin du calendar | — |
+| `[infomaniak]` | `calendar_id` | ID du calendar Infomaniak où créer les événements | — |
+| `[infomaniak]` | `visio_base_url` | Hostname kMeet pour les liens visio | — |
+| `[slots]` | `duration_minutes` | Durée des créneaux en minutes | `30` |
+| `[slots]` | `min_delay_minutes` | Délai minimum avant de pouvoir réserver | `0` |
+| `[slots.periods]` | `mon`…`sun` | Périodes par jour (`["HH:MM-HH:MM", ...]`) | tous les jours `10:00-12:00` et `14:00-16:00` |
+| `[booking]` | `description_template` | Modèle de la description envoyée à kMeet — placeholders `{description}`, `{email}`, `{name}`, `{start}`, `{end}` | `"{description}\n\nContact: {email}"` |
+
+**Sémantique de `[slots.periods]`** : si la section est **absente**, périodes par défaut
+pour tous les jours ; si elle est **présente**, elle remplace complètement les valeurs
+par défaut et les jours non listés sont **fermés** (aucun créneau).
+
+### `.env` — secrets uniquement
+
+| Variable | Description |
+|----------|-------------|
+| `CALDAV_LOGIN` | Identifiant de connexion CalDAV |
+| `CALDAV_PASSWORD` | Mot de passe CalDAV |
+| `KMEET_API_TOKEN` | Token Bearer pour `api.infomaniak.com` |
+| `SAV_API_KEY` | Clé d'API exigée sur tous les endpoints (`Authorization: Bearer <clé>`) |
 
 ---
 
@@ -42,7 +77,9 @@ sav/
 
 - **Authentification par clé d'API** : tous les endpoints exigent le header `Authorization: Bearer $SAV_API_KEY`. Sans clé valide : `401 Unauthorized`. La clé est destinée au backend appelant (l'utilisateur final est authentifié côté application, il ne saisit pas son email).
 - **Rate limiting** : `actix-governor`, par IP : 1 requête autorisée toutes les 10 secondes, burst de 50. Au-delà : `429 Too Many Requests`.
+- **CORS** : `actix-cors::Cors::permissive()` — le composant UI (crate `ui/` du monorepo, voir son README) appelle l'API depuis une autre origine. L'accès reste protégé par la clé d'API.
 - **HTTPS** : à terminer au reverse proxy (Caddy/nginx) devant le serveur ; actix écoute en HTTP.
+- **Port** : `SAV_PORT` (défaut `8080`).
 
 ---
 
@@ -89,18 +126,22 @@ sav/
 **Description :** Liste **tous** les créneaux de SAV sur la semaine glissante (7 jours), groupés par jour et avec leur statut de réservation.
 
 **Un slot :**
-- Durée fixe de 30 minutes
+- Durée configurable (`SAV_SLOT_DURATION`, défaut 30 minutes)
 - ID au format `YYYYMMDDHHMM` (début du créneau)
 - `start_at` au format `HH:MM` (heure locale de début du créneau)
 - Propriété `booked` (booléen) — `true` si un événement du calendar chevauche le créneau
 
-**Plages horaires quotidiennes :** 10:00–12:00 et 14:00–16:00
-(soit 8 slots/jour : 10:00, 10:30, 11:00, 11:30, 14:00, 14:30, 15:00, 15:30)
+**Périodes horaires :** configurables jour par jour via `SAV_PERIODS`
+(clés `mon`–`sun`, périodes `"HH:MM-HH:MM"`). Par défaut : 10:00–12:00 et
+14:00–16:00 tous les jours. Si `SAV_PERIODS` est défini, il remplace les
+valeurs par défaut et les jours non listés sont **fermés** (aucun créneau).
+La grille des débuts de créneaux est alignée sur le début de chaque période
+(ex. période 09:00–11:45 avec 45 min → 09:00, 09:45, 10:30).
 
 **Règles :**
 - Les slots sont groupés par date (clé `YYYY-MM-DD`), dans l'ordre chronologique
 - Un slot chevauchant un événement du calendar est marqué `booked: true`
-- Les slots déjà passés (avant l'heure courante) ne sont pas retournés
+- Les slots déjà passés ou commençant avant `maintenant + SAV_MIN_DELAY_MINUTES` ne sont pas retournés
 - Le week-end est inclus pour l'instant
 
 **Réponse :**
@@ -125,6 +166,7 @@ sav/
 **Requête :**
 ```json
 {
+  "name": "Jean Dupont",
   "email": "client@domain.com",
   "description": "Probleme de connexion au boitier",
   "slot_id": "202609291430"
@@ -133,12 +175,14 @@ sav/
 
 **Validation (400 Bad Request) :**
 - `slot_id` au format `YYYYMMDDHHMM`
-- `slot_id` doit être un début de créneau valide (grille 30 min, 10h–12h / 14h–16h)
+- `slot_id` doit être un début de créneau valide selon la configuration (`[slots]` de `config.toml`) pour le jour concerné
+- `slot_id` doit respecter le délai minimum (`[slots] min_delay_minutes`) : plus tôt → `400` avec le message « slot_id trop proche »
 - `slot_id` dans la semaine glissante et dans le futur
+- `name` non vide (obligatoire, comme `email`)
 - `email` non vide et contenant un `@`
 
 **Autres codes :**
-- `409 Conflict` : slot déjà réservé (chevauchement avec un événement du calendar)
+- `409 Conflict` : slot déjà réservé (chevauchement avec un événement du calendar), réservation en cours sur le même slot, **ou un rendez-vous existe déjà pour cet email** (un seul rendez-vous à la fois par utilisateur)
 - `502 Bad Gateway` : erreur de l'API Infomaniak
 - `201 Created` : réservation créée
 
@@ -146,6 +190,7 @@ sav/
 ```json
 {
   "slot_id": "202609291430",
+  "name": "Jean Dupont",
   "email": "client@domain.com",
   "description": "Probleme de connexion au boitier",
   "start": "2026-09-29 14:30:00",
@@ -163,9 +208,48 @@ sav/
 | `VISIO_BASE_URL` | Hostname kMeet (ex: `kmeet.infomaniak.com`) |
 
 **Notes :**
-- L'événement est créé avec le titre `SAV - {email}`, la description `{description}\n\nContact: {email}`, timezone `Europe/Zurich`
+- L'événement est créé avec le titre `SAV - {email}`, la description construite depuis `[booking] description_template` (placeholders `{description}`, `{email}`, `{name}`, `{start}`, `{end}`), timezone `Europe/Zurich`
+- Le client est ajouté en participant (`attendees` : `address` = email, `organizer: false`, `name` = nom du client, `state: "NEEDS-ACTION"`) — il reçoit l'invitation
 - Anti double-réservation : le `slot_id` est « claimé » atomiquement en mémoire (`Mutex<HashSet>`) pendant la vérification CalDAV + la création de l'événement ; une requête concurrente sur le même slot reçoit `409` immédiatement
 - Limite du verrou : il est en mémoire du process, donc valable pour une instance unique du serveur. Pour plusieurs instances (ou un redémarrage), il faudrait un verrou partagé (Redis, ou table SQL avec contrainte d'unicité sur `slot_id`)
+
+---
+
+### GET `/api/bookings/next?email=client@domain.com`
+
+**Description :** Retourne le **prochain rendez-vous** SAV de l'utilisateur (le plus proche événement futur dont le titre est `SAV - {email}`), dans la semaine glissante. C'est ce qui alimente le bandeau de l'UI une fois un rendez-vous pris.
+
+**Réponse (rendez-vous trouvé) :**
+```json
+{
+  "next_booking": {
+    "slot_id": "202610031400",
+    "start": "2026-10-03 14:00:00",
+    "end": "2026-10-03 14:30:00"
+  }
+}
+```
+
+**Réponse (aucun rendez-vous) :** `{ "next_booking": null }`
+
+**Codes :** `400` email invalide, `401` sans clé d'API. La correspondance sur le titre est insensible à la casse.
+
+---
+
+### POST `/api/bookings/cancel`
+
+**Description :** Annule le prochain rendez-vous SAV de l'utilisateur en **supprimant l'événement du calendar Infomaniak** via CalDAV (`DELETE {calendar_uri}/{uid}.ics`).
+
+**Requête :**
+```json
+{ "email": "client@domain.com" }
+```
+
+**Codes :**
+- `200` : `{"cancelled": true}` — après un `DELETE` réussi, le serveur revérifie que l'événement a disparu du calendar
+- `404` : aucun rendez-vous à annuler
+- `400` : email invalide
+- `502` : le CalDAV refuse la suppression ou elle n'est pas confirmée
 
 ---
 
@@ -285,11 +369,34 @@ ical = "0.11"        # Parsing ICS
 ## Exécution
 
 ```bash
-# Démarrer le serveur
+# En local (dev)
 cargo run
 
-# Le serveur écoute sur :0.0.0.0:8080
+# Le serveur écoute sur :0.0.0.0:8080 (configurable via SAV_PORT)
 ```
+
+## Docker
+
+Build multi-stage : `rust:1-alpine` compile un binaire **statique** en release
+(TLS via `rustls`, pas d'OpenSSL système), runtime `alpine:3.20`. Le conteneur
+sert **l'API et le bundle UI** (`ui/static` : sav.js, sav.css, module wasm,
+page de démo) — une seule origine, pas de CORS nécessaire.
+
+```bash
+make ui-build                      # build du module wasm + copie dans ui/static
+docker build -t sav-server .       # l'image embarque le bundle
+docker run --rm -p 8080:8080 --env-file .env sav-server
+```
+
+Ouvrir http://localhost:8080/ (page de démo intégrant le widget).
+
+Notes :
+- `.env` (secrets) est exclu du contexte Docker (`.dockerignore`) et passe par `--env-file` au `docker run` ; `config.toml` (non-secret) est copié dans l'image
+- Pour surcharger la config en conteneur : monter un `config.toml` et/ou définir `CONFIG_PATH`
+- `ui/Cargo.toml` est copié au build car le workspace le référence ; le bundle UI vient de `ui/static` (construit au préalable avec `make ui-build`)
+- **Déploiement sur un autre hôte que localhost** : le module wasm a l'URL de l'API cuite au build. Reconstruisez-le avec `SAV_URL=` vide dans le `.env` (`make ui-build`) : le module s'adapte alors à l'origine de la page (mono-origine). Sinon, exportez `SAV_URL=https://votre-hote` avant le build
+- Le binaire est statique : aucun paquet runtime à maintenir hors `ca-certificates`
+- Contrepartie de musl : allocateur moins performant que glibc sous forte charge, sans impact pour ce serveur
 
 ---
 

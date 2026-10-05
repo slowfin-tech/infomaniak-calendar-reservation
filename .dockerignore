@@ -1,0 +1,10 @@
+target/
+ui/pkg/
+.git/
+.env
+Dockerfile
+.dockerignore
+AGENTS.md
+ui/README.md
+ui/src/
+ui/scripts/

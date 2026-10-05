@@ -24,6 +24,16 @@ pub struct CalendarResponse {
     pub events_by_date: HashMap<String, Vec<Event>>,
 }
 
+/// Evenement brut parsé depuis l'ICS, avant formatage.
+/// `uid` permet de supprimer l'evenement via CalDAV (DELETE {uid}.ics).
+#[derive(Debug, Clone)]
+pub struct RawEvent {
+    pub summary: String,
+    pub start: NaiveDateTime,
+    pub end: NaiveDateTime,
+    pub uid: Option<String>,
+}
+
 // --- CalDAV Configuration ---
 
 pub struct CalDavConfig {
@@ -34,10 +44,13 @@ pub struct CalDavConfig {
 }
 
 impl CalDavConfig {
+    /// URL/URI du calendar depuis config.toml, identifiants (secrets) depuis
+    /// l'environnement (.env).
     pub fn from_env() -> Self {
+        let settings = &crate::config::global().caldav;
         CalDavConfig {
-            url: std::env::var("CALDAV_URL").unwrap_or_else(|_| "https://sync.infomaniak.com/".into()),
-            calendar_uri: std::env::var("CALDAV_CALENDAR_URI").expect("CALDAV_CALENDAR_URI doit etre defini"),
+            url: settings.url.clone(),
+            calendar_uri: settings.calendar_uri.clone(),
             login: std::env::var("CALDAV_LOGIN").expect("CALDAV_LOGIN doit etre defini"),
             password: std::env::var("CALDAV_PASSWORD").expect("CALDAV_PASSWORD doit etre defini"),
         }
@@ -82,16 +95,22 @@ fn expand_recurring_event(
     summary: &str,
     start: NaiveDateTime,
     end: NaiveDateTime,
+    uid: Option<String>,
     rrule: &str,
     range_start: NaiveDate,
     range_end: NaiveDate,
-) -> Vec<(String, NaiveDateTime, NaiveDateTime)> {
+) -> Vec<RawEvent> {
     let mut occurrences = Vec::new();
     let dur = end - start;
     let start_date = start.date();
 
     if start_date >= range_start && start_date <= range_end {
-        occurrences.push((summary.to_string(), start, end));
+        occurrences.push(RawEvent {
+            summary: summary.to_string(),
+            start,
+            end,
+            uid: uid.clone(),
+        });
     }
 
     let freq = rrule.split(';')
@@ -171,7 +190,12 @@ fn expand_recurring_event(
 
             if current_date >= range_start && current_date <= range_end {
                 let new_start = current_date.and_hms_opt(start.time().hour(), start.time().minute(), start.time().second()).unwrap();
-                occurrences.push((summary.to_string(), new_start, new_start + dur));
+                occurrences.push(RawEvent {
+                    summary: summary.to_string(),
+                    start: new_start,
+                    end: new_start + dur,
+                    uid: uid.clone(),
+                });
             }
         }
     }
@@ -179,7 +203,7 @@ fn expand_recurring_event(
     occurrences
 }
 
-fn parse_ics_content(ics_content: &str, range_start: NaiveDate, range_end: NaiveDate) -> Vec<(String, NaiveDateTime, NaiveDateTime)> {
+fn parse_ics_content(ics_content: &str, range_start: NaiveDate, range_end: NaiveDate) -> Vec<RawEvent> {
     let mut events = Vec::new();
     let cursor = Cursor::new(ics_content.as_bytes());
     let parser = ical::parser::ical::IcalParser::new(cursor);
@@ -205,13 +229,20 @@ fn parse_ics_content(ics_content: &str, range_start: NaiveDate, range_end: Naive
                     DateTime::<Utc>::from_timestamp(0, 0).unwrap().naive_utc()
                 });
 
+                let uid = event.get_property("UID").and_then(|p| p.value.clone());
+
                 if let Some(rrule) = extract_rrule(&event) {
-                    let expanded = expand_recurring_event(summary, start, end, &rrule, range_start, range_end);
+                    let expanded = expand_recurring_event(summary, start, end, uid, &rrule, range_start, range_end);
                     events.extend(expanded);
                 } else {
                     let event_date = start.date();
                     if event_date >= range_start && event_date <= range_end {
-                        events.push((summary.to_string(), start, end));
+                        events.push(RawEvent {
+                            summary: summary.to_string(),
+                            start,
+                            end,
+                            uid,
+                        });
                     }
                 }
             }
@@ -298,15 +329,15 @@ fn extract_ics_from_xml(xml_content: &str) -> Vec<String> {
 
 // --- Group by date ---
 
-fn group_by_date(events: Vec<(String, NaiveDateTime, NaiveDateTime)>) -> CalendarResponse {
+fn group_by_date(events: Vec<RawEvent>) -> CalendarResponse {
     let mut map: HashMap<String, Vec<Event>> = HashMap::new();
 
-    for (summary, start, end) in events {
-        let date_key = start.date().format("%Y-%m-%d").to_string();
+    for event in events {
+        let date_key = event.start.date().format("%Y-%m-%d").to_string();
         map.entry(date_key).or_default().push(Event {
-            summary,
-            start: format_display_date(&start),
-            end: format_display_date(&end),
+            summary: event.summary,
+            start: format_display_date(&event.start),
+            end: format_display_date(&event.end),
         });
     }
 
@@ -317,9 +348,7 @@ fn group_by_date(events: Vec<(String, NaiveDateTime, NaiveDateTime)>) -> Calenda
 
 /// Récupère les événements de la semaine glissante sous forme brute,
 /// avant formatage. Utilisé par l'endpoint events et par le module slots.
-pub async fn get_sliding_week_raw_events(
-    config: &CalDavConfig,
-) -> Vec<(String, NaiveDateTime, NaiveDateTime)> {
+pub async fn get_sliding_week_raw_events(config: &CalDavConfig) -> Vec<RawEvent> {
     let (range_start, range_end) = get_sliding_week_range();
 
     match fetch_caldav_events(config).await {
@@ -337,4 +366,30 @@ pub async fn get_sliding_week_raw_events(
 
 pub async fn get_sliding_week_calendar_events(config: &CalDavConfig) -> CalendarResponse {
     group_by_date(get_sliding_week_raw_events(config).await)
+}
+
+// --- Suppression d'un evenement ---
+
+/// Supprime l'evenement CalDAV porte par cet UID
+/// (DELETE {calendar_url}/{uid}.ics, authentification Basic).
+/// Retourne true si le serveur confirme la suppression.
+pub async fn delete_caldav_event(config: &CalDavConfig, uid: &str) -> Result<bool, String> {
+    let client = reqwest::Client::new();
+    let url = format!("{}{}.ics", config.calendar_url(), uid);
+
+    let auth = format!("{}:{}", config.login, config.password);
+    let auth_header = format!("Basic {}", base64::engine::general_purpose::STANDARD.encode(auth));
+
+    let response = client
+        .delete(&url)
+        .header("Authorization", &auth_header)
+        .send()
+        .await
+        .map_err(|e| format!("Erreur requete CalDAV DELETE: {}", e))?;
+
+    if response.status().is_success() {
+        Ok(true)
+    } else {
+        Err(format!("Erreur CalDAV DELETE: status={}", response.status()))
+    }
 }

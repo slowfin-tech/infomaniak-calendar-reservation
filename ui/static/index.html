@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Démo du widget SAV</title>
+  <style>
+    /* Styles de la page hote - le widget apporte les siens via sav.css */
+    body { font-family: system-ui, sans-serif; max-width: 720px; margin: 2rem auto; padding: 0 1rem; }
+  </style>
+</head>
+<body>
+  <h1>Démo du widget SAV</h1>
+  <p>Page hôte : le widget s'initialise ci-dessous (CSS injecté, wasm chargé au clic).</p>
+
+  <div id="sav-widget"></div>
+
+  <!-- Initializer type Google Analytics -->
+  <script>
+    window.Sav = window.Sav || function () { (window.Sav.q = window.Sav.q || []).push(arguments); };
+    Sav('init', {
+      target: '#sav-widget',
+      name: 'Nicolas Dufreche',
+      email: 'n.dufreche@gmail.com'
+    });
+  </script>
+  <script async src="./sav.js"></script>
+</body>
+</html>

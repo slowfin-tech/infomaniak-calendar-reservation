@@ -1,2 +1,4 @@
 /target
+/ui/pkg
 .env
+/ui/static/pkg
