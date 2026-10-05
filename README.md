@@ -94,4 +94,4 @@ Voir [`CONTRIBUTING.md`](CONTRIBUTING.md). Signaler un problème de sécurité :
 
 ## Licence
 
-À définir — voir [`LICENSE`](LICENSE).
+Distribué sous licence [MIT](LICENSE).

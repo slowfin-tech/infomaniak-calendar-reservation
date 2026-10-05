@@ -2,6 +2,7 @@
 name = "sav_server"
 version = "0.1.0"
 edition = "2024"
+license = "MIT"
 
 # Monorepo : le serveur (ce package) + l'UI wasm (ui/).
 # Les deux crates ne partagent aucun code : l'UI ne discute avec le serveur
