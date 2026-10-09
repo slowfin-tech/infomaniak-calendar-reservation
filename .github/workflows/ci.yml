@@ -21,19 +21,18 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 14
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-unknown-linux-musl,aarch64-unknown-linux-musl
       - uses: Swatinem/rust-cache@v2
-      - uses: jetli/wasm-pack-action@v0.4.0
+      # wasm-pack depuis les releases officielles (binaire, pas de compile).
+      - uses: taiki-e/install-action@v2
         with:
-          version: latest
-      - uses: actions/setup-node@v4
+          tool: wasm-pack
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
-      # Zig pour le cross-compile musl aarch64 (cargo-zigbuild).
-      - uses: mlugg/setup-zig@v1
       - name: Tests serveur
         run: cargo test --locked
       - name: Tests module wasm (Node, sans navigateur)
@@ -42,9 +41,12 @@ jobs:
         run: |
           sudo apt-get update && sudo apt-get install -y musl-tools
           cargo build --release --locked --target x86_64-unknown-linux-musl
+      # Cross-compile aarch64 via cargo-zigbuild: zig vient du paquet Python
+      # ziglang (cargo-zigbuild l'utilise quand aucun binaire zig n'est dans
+      # le PATH) - pas de telechargement externe hors pip.
       - name: Binaire statique musl (aarch64, zigbuild)
         run: |
-          python -m pip install --user cargo-zigbuild
+          python -m pip install --user cargo-zigbuild ziglang
           cargo zigbuild --release --locked --target aarch64-unknown-linux-musl
       - name: Bundle statique UI (build wasm + copie dans static/)
         run: make ui-build
@@ -78,7 +80,7 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: actions/download-artifact@v4
         with:
           name: infomaniak-calendar-reservation-binaries
