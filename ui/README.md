@@ -1,4 +1,4 @@
-# sav-ui
+# infomaniak-ui
 
 Interface de réservation de créneaux Infomaniak : application **Yew** compilée en
 wasm. Membre `ui/` du monorepo, mais **composant indépendant** — la crate ne
@@ -10,7 +10,7 @@ partage aucun code avec le serveur et communique uniquement via son API HTTP
 Aucune configuration n'est compilée dans le module wasm. Au démarrage, le
 module charge `GET /api/config` sur le serveur, qui lui fournit :
 
-- `api_key` — la clé d'API (lue depuis `SAV_API_KEY` du `.env` du serveur)
+- `api_key` — la clé d'API (lue depuis `INFOMANIAK_API_KEY` du `.env` du serveur)
 - `ui` — la section `[ui]` de `config.toml` telle quelle (title,
   placeholder, description_label, cancel_confirm, ... : **toute clé ajoutée
   est servie automatiquement**)
@@ -30,12 +30,11 @@ La page n'a donc rien à configurer. Attention : la clé est lisible dans le
 
 ```
 ui/
-├── Cargo.toml      # Crate wasm (sav_ui, cdylib, Yew csr)
-├── build.rs        # Injecte SAV_API_KEY / SAV_URL / SAV_TITLE au build
+├── Cargo.toml      # Crate wasm (infomaniak_ui, cdylib, Yew csr)
 ├── src/
 │   ├── lib.rs      # Client API + composant Yew + run_app()
 │   └── tests.rs    # Tests wasm-bindgen-test
-├── static/         # Bundle déployable: sav.js (initialiseur), sav.css, pkg/, démo
+├── static/         # Bundle déployable: infomaniak.js (initialiseur), infomaniak.css, pkg/, démo
 ├── scripts/        # smoke.mjs : test manuel sans navigateur
 └── pkg/            # Sortie wasm-pack (copiée dans static/pkg par make ui-build)
 ```
@@ -44,24 +43,24 @@ ui/
 
 ```html
 <script>
-  window.Sav = window.Sav || function () { (window.Sav.q = window.Sav.q || []).push(arguments); };
-  Sav('init', {
-    target: '#sav-widget',          // conteneur (défaut: fin du <body>)
+  window.InfomaniakCalendar = window.InfomaniakCalendar || function () { (window.InfomaniakCalendar.q = window.InfomaniakCalendar.q || []).push(arguments); };
+  InfomaniakCalendar('init', {
+    target: '#infomaniak-widget',          // conteneur (défaut: fin du <body>)
     name: 'Jean Dupont',            // nom du client (requis côté API)
     email: 'client@domain.com',     // email du client
     apiUrl: ''                      // optionnel: autre origine pour l'API
   });
 </script>
-<script async src="https://votre-hote/sav.js"></script>
+<script async src="https://votre-hote/infomaniak.js"></script>
 ```
 
-Le chargeur `sav.js` gère tout : file d'attente de commandes (appels avant ou
-après son chargement), injection du CSS (`sav.css`), création du bouton et du
+Le chargeur `infomaniak.js` gère tout : file d'attente de commandes (appels avant ou
+après son chargement), injection du CSS (`infomaniak.css`), création du bouton et du
 conteneur dans `target`, et **chargement du module wasm uniquement au premier
 clic**. L'interface (créneaux, formulaire, rendez-vous) s'affiche dans une
 **modal avec overlay** : clic sur l'overlay ou sur « × » pour fermer, le
 bouton hôte la ré-ouvre sans recharger le module. Le CSS est scopé sous
-`.sav-app` — rien ne fuite sur la page hôte.
+`.infomaniak-app` — rien ne fuite sur la page hôte.
 
 ## Build
 
@@ -82,7 +81,7 @@ l'API puis revient à la liste rafraîchie, « Annuler » revient sans réserver
 La description est obligatoire.
 
 Si l'utilisateur a déjà un rendez-vous (`GET /api/bookings/next`, tracé par
-le titre `SAV - {email}` des événements), **le calendrier n'est pas affiché** :
+le titre `Infomaniak - {email}` des événements), **le calendrier n'est pas affiché** :
 l'UI montre uniquement « Votre prochain rendez-vous : Lundi 5 octobre à
 14:30 » (un seul rendez-vous à la fois — le serveur refuse aussi un second
 booking avec `409`), avec un bouton **« Annuler le rendez-vous »**

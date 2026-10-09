@@ -1,22 +1,22 @@
-// Smoke test du module wasm sav_ui (application Yew) contre le serveur SAV reel.
-// Aucun navigateur requis: le module pkg/sav_ui.js est charge dans Node.
+// Smoke test du module wasm infomaniak_ui (application Yew) contre le serveur
+// reel. Aucun navigateur requis: le module pkg/infomaniak_ui.js est charge
+// dans Node.
 //
 //   node ui/scripts/smoke.mjs                    # liste les creneaux
 //   node ui/scripts/smoke.mjs --book 202610011000 --email client@domain.com
 //
-// La cle d'API et l'URL du serveur sont celles du build (build.rs lit le .env
-// du repo ou les variables SAV_API_KEY / SAV_URL).
+// La cle d'API vient de GET /api/config du serveur (configuration runtime).
+// Par defaut le serveur est http://localhost:8080; --url le surcharge.
 
 import { readFile } from "node:fs/promises";
-import { fileURLToPath } from "node:url";
-import init, * as mod from "../pkg/sav_ui.js";
+import init, * as mod from "../pkg/infomaniak_ui.js";
 
 // reqwest/wasm attend un global `window`, absent de Node.
 globalThis.window = globalThis;
 
 // Le glue --target web charge le .wasm par fetch relatif: sous Node on fournit
 // directement les octets.
-const wasmBytes = await readFile(new URL("../pkg/sav_ui_bg.wasm", import.meta.url));
+const wasmBytes = await readFile(new URL("../pkg/infomaniak_ui_bg.wasm", import.meta.url));
 await init({ module_or_path: wasmBytes });
 
 const args = process.argv.slice(2);
@@ -24,6 +24,12 @@ const flag = (name) => {
   const i = args.indexOf(`--${name}`);
   return i !== -1 ? args[i + 1] : undefined;
 };
+
+// URL du serveur, lue par le module via la config de l'initialiseur.
+const url = flag("url");
+if (url) {
+  globalThis.__infomaniak_config = { apiUrl: url };
+}
 
 try {
   if (args.includes("--book")) {

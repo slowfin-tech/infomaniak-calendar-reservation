@@ -5,7 +5,7 @@ Merci de l'intérêt pour ce projet. Voici comment démarrer.
 ## Développement local
 
 ```bash
-git clone <repo> && cd sav
+git clone <repo> && cd infomaniak-calendar-reservation
 cp .env.example .env      # renseigner les secrets (voir AGENTS.md)
 make run                  # serveur sur :8080
 ```
@@ -18,7 +18,7 @@ Node 18+ (pour les tests du module wasm et le script de smoke test).
 ```
 srv/     # serveur HTTP (Actix-web) : modules main, config, calendar, slots,
          # booking, email
-ui/      # crate wasm (Yew) + static/ (initializer sav.js, CSS, bundle)
+ui/      # crate wasm (Yew) + static/ (initializer infomaniak.js, CSS, bundle)
 ```
 
 Les deux crates ne partagent **aucun code** : l'UI dialogue avec le serveur

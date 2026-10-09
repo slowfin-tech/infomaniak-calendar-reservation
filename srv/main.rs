@@ -11,10 +11,18 @@ mod email;
 mod slots;
 use calendar::{get_sliding_week_calendar_events, CalDavConfig};
 
-/// Verifie la cle d'API (Authorization: Bearer <SAV_API_KEY>) sur chaque
-/// endpoint. Retourne une reponse 401 si l'appelant n'est pas autorise.
+/// Cle d'API: INFOMANIAK_API_KEY, avec repli sur l'ancienne SAV_API_KEY
+/// (renommage du projet, migration sans casse).
+pub(crate) fn api_key() -> String {
+    std::env::var("INFOMANIAK_API_KEY")
+        .or_else(|_| std::env::var("SAV_API_KEY"))
+        .expect("INFOMANIAK_API_KEY doit etre defini")
+}
+
+/// Verifie la cle d'API (Authorization: Bearer <cle>) sur chaque endpoint.
+/// Retourne une reponse 401 si l'appelant n'est pas autorise.
 pub(crate) fn check_api_key(req: &HttpRequest) -> Result<(), actix_web::HttpResponse> {
-    let api_key = std::env::var("SAV_API_KEY").expect("SAV_API_KEY doit etre defini");
+    let api_key = api_key();
 
     let authorized = req
         .headers()
@@ -44,7 +52,7 @@ struct UiPublicConfig {
 async fn get_ui_config() -> actix_web::HttpResponse {
     let config = config::global();
     actix_web::HttpResponse::Ok().json(UiPublicConfig {
-        api_key: std::env::var("SAV_API_KEY").unwrap_or_default(),
+        api_key: api_key(),
         ui: config.ui.clone(),
     })
 }
@@ -102,8 +110,8 @@ async fn main() -> std::io::Result<()> {
             .service(booking::get_next_booking)
             .service(booking::cancel_booking)
             .service(get_ui_config)
-            // Bundle UI (sav.js, sav.css, pkg/, page de demo) servi par le
-            // meme hote - enregistre en dernier, ne capture que /api/ ne
+            // Bundle UI (infomaniak.js, infomaniak.css, pkg/, page de demo)
+            // servi par le meme hote - enregistre en dernier, ne capture que /api/ ne
             // touche pas.
             .service(Files::new("/", "./ui/static").index_file("index.html"))
     })

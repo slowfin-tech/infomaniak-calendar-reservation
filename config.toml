@@ -1,6 +1,6 @@
-# Configuration du serveur SAV - tout ce qui n'est pas secret.
-# Les secrets (CALDAV_LOGIN, CALDAV_PASSWORD, KMEET_API_TOKEN, SAV_API_KEY)
-# restent dans le .env.
+# Configuration du serveur infomaniak-calendar-reservation - tout ce qui
+# n'est pas secret. Les secrets (CALDAV_LOGIN, CALDAV_PASSWORD,
+# KMEET_API_TOKEN, INFOMANIAK_API_KEY) restent dans le .env.
 # Champs optionnels: valeurs par défaut indiquées en commentaire.
 
 [server]
@@ -8,11 +8,11 @@
 port = 8080
 
 [ui]
-# Titre affiché par l'interface (aussi utilisé par le module wasm à son build)
-title = "SAV - Rendez-vous"
+# Titre affiché par l'interface
+title = "Infomaniak - Rendez-vous"
 
-# Textes de l'interface: chaque clé de cette section est injectée au build du
-# module wasm (SAV_UI_<CLÉ>) — les clés non définies utilisent les défauts.
+# Textes de l'interface: chaque clé de cette section est servie au module wasm
+# au démarrage (GET /api/config) — les clés non définies utilisent les défauts.
 # Placeholder du formulaire de réservation
 placeholder = "Problème de connexion au boîtier..."
 # Libellé au-dessus du formulaire
@@ -58,7 +58,7 @@ sun = []
 # Défaut: "{description}\n\nContact: {email}"
 # Exemple (chaîne multi-lignes TOML) :
 description_template = '''
-Rendez-vous SAV
+Rendez-vous Infomaniak
 Problème : {description}
 Client : {email}
 Créneau : {start} -> {end}
@@ -71,7 +71,7 @@ Créneau : {start} -> {end}
 sender = "sav@slowfintech.com"
 # Objet et corps (texte brut) — placeholders: {name}, {email}, {description},
 # {start}, {end}, {link} (lien de la salle visio kMeet, vide si indisponible).
-subject = "Votre rendez-vous SAV aldatoo"
+subject = "Votre rendez-vous aldatoo"
 body = '''
 Bonjour {name},
 
@@ -79,7 +79,7 @@ Votre rendez-vous est confirmé pour le {start}.
 Lien visio : {link}
 
 Cordialement,
-Le SAV aldatoo
+Le service aldatoo
 '''
 # Les identifiants SMTP (secrets) sont dans le .env:
 # SMTP_USER, SMTP_PASSWORD, SMTP_SEND_URL, SMTP_SEND_PORT.

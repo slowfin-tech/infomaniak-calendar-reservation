@@ -5,9 +5,8 @@
 //! ```
 //!
 //! Les tests reseau installent un stub `fetch` global qui rejoue des reponses
-//! de l'API SAV: pas d'appel externe, comportement verifie de bout en bout
-//! (codes HTTP, parsing, filtrage, corps des requetes). La cle API et l'URL
-//! sont celles du build (build.rs lit le .env du repo).
+//! de l'API: pas d'appel externe, comportement verifie de bout en bout
+//! (codes HTTP, parsing, filtrage, corps des requetes).
 
 use std::collections::BTreeMap;
 
@@ -17,7 +16,7 @@ use wasm_bindgen_test::wasm_bindgen_test;
 
 use serde::Serialize as _;
 
-use crate::{SavClient, Slot, SlotsResponse};
+use crate::{ApiClient, Slot, SlotsResponse};
 
 const SLOTS_FIXTURE: &str = r#"{
   "slots_by_date": {
@@ -91,7 +90,7 @@ fn format_rdv_avec_heure() {
 #[wasm_bindgen_test]
 fn base_url_meme_origine_quand_vide() {
     use crate::resolve_base_url;
-    // SAV_URL explicite: utilisee telle quelle.
+    // URL explicite: utilisee telle quelle.
     assert_eq!(resolve_base_url("http://localhost:8080/"), "http://localhost:8080");
     // Vide: origine de la page - absente en Node, repli localhost de dev.
     assert_eq!(resolve_base_url(""), "http://localhost:8080");
@@ -150,9 +149,9 @@ fn bloc_unique_sans_duree_connue() {
 fn config_depuis_initialiseur_puis_url() {    use crate::config_value;
     let global = js_sys::global();
 
-    // L'initialiseur (sav.js) pose __sav_config sur le global avant run_app().
+    // L'initialiseur (infomaniak.js) pose __infomaniak_config sur le global avant run_app().
     let config = js_sys::eval("({ email: 'cfg@domain.com', name: 'Jean Dupont' })").unwrap();
-    js_sys::Reflect::set(&global, &JsValue::from("__sav_config"), &config).unwrap();
+    js_sys::Reflect::set(&global, &JsValue::from("__infomaniak_config"), &config).unwrap();
 
     assert_eq!(config_value("email").as_deref(), Some("cfg@domain.com"));
     assert_eq!(config_value("name").as_deref(), Some("Jean Dupont"));
@@ -162,10 +161,10 @@ fn config_depuis_initialiseur_puis_url() {    use crate::config_value;
 
     // Valeur vide dans le config: ignoree (retour au repli).
     let config_vide = js_sys::eval("({ email: '' })").unwrap();
-    js_sys::Reflect::set(&global, &JsValue::from("__sav_config"), &config_vide).unwrap();
+    js_sys::Reflect::set(&global, &JsValue::from("__infomaniak_config"), &config_vide).unwrap();
     assert_eq!(config_value("email"), None);
 
-    js_sys::Reflect::set(&global, &JsValue::from("__sav_config"), &JsValue::NULL).unwrap();
+    js_sys::Reflect::set(&global, &JsValue::from("__infomaniak_config"), &JsValue::NULL).unwrap();
 }
 
 #[wasm_bindgen_test]
@@ -258,8 +257,8 @@ globalThis.__route = (input) => {
 };
 "#;
 
-fn client_for_tests() -> SavClient {
-    SavClient::new("http://localhost:8080".to_string(), "cle-test".to_string())
+fn client_for_tests() -> ApiClient {
+    ApiClient::new("http://localhost:8080".to_string(), "cle-test".to_string())
 }
 
 #[wasm_bindgen_test]
@@ -435,7 +434,7 @@ async fn config_runtime_parsee_depuis_api_config() {
         helpers = JS_HELPERS
     ));
 
-    let config = crate::SavClient::fetch_config().await.expect("config doit etre lue");
+    let config = crate::ApiClient::fetch_config().await.expect("config doit etre lue");
     assert_eq!(config.api_key, "cle-abc");
     assert_eq!(config.ui.get("title").map(String::as_str), Some("Mon titre"));
     assert_eq!(config.ui.get("placeholder").map(String::as_str), Some("Dites tout"));

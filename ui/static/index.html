@@ -3,27 +3,27 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Démo du widget SAV</title>
+  <title>Démo du widget Infomaniak</title>
   <style>
-    /* Styles de la page hote - le widget apporte les siens via sav.css */
+    /* Styles de la page hote - le widget apporte les siens via infomaniak.css */
     body { font-family: system-ui, sans-serif; max-width: 720px; margin: 2rem auto; padding: 0 1rem; }
   </style>
 </head>
 <body>
-  <h1>Démo du widget SAV</h1>
+  <h1>Démo du widget Infomaniak</h1>
   <p>Page hôte : le widget s'initialise ci-dessous (CSS injecté, wasm chargé au clic).</p>
 
-  <div id="sav-widget"></div>
+  <div id="infomaniak-widget"></div>
 
   <!-- Initializer type Google Analytics -->
   <script>
-    window.Sav = window.Sav || function () { (window.Sav.q = window.Sav.q || []).push(arguments); };
-    Sav('init', {
-      target: '#sav-widget',
+    window.InfomaniakCalendar = window.InfomaniakCalendar || function () { (window.InfomaniakCalendar.q = window.InfomaniakCalendar.q || []).push(arguments); };
+    InfomaniakCalendar('init', {
+      target: '#infomaniak-widget',
       name: 'Nicolas Dufreche',
       email: 'n.dufreche@gmail.com'
     });
   </script>
-  <script async src="./sav.js"></script>
+  <script async src="./infomaniak.js"></script>
 </body>
 </html>

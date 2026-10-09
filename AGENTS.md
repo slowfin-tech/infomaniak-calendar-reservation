@@ -7,12 +7,12 @@ Serveur Rust utilisant Actix-web pour exposer une API REST qui récupère les é
 ## Structure du projet
 
 ```
-sav/
-├── Cargo.toml           # Workspace monorepo + crate serveur (sav_server, sources dans srv/)
+infomaniak-calendar-reservation/
+├── Cargo.toml           # Workspace monorepo + crate serveur (infomaniak-calendar-reservation, sources dans srv/)
 ├── Cargo.lock           # Lockfile du workspace
 ├── config.toml          # Configuration non-secret (port, caldav, creneaux, titre...)
 ├── .env.example         # Modèle de secrets (copier en .env)
-├── Dockerfile           # Build multi-stage de l'image serveur (sav-server)
+├── Dockerfile           # Build multi-stage de l'image serveur (infomaniak-calendar-reservation)
 ├── .dockerignore        # Exclusions du contexte Docker (target/, .env, ui/...)
 ├── README.md            # Vue d'ensemble du projet
 ├── CHANGELOG.md         # Historique des changements
@@ -26,12 +26,11 @@ sav/
 │   ├── booking.rs       # Module réservation - POST /api/bookings, API Infomaniak kMeet
 │   ├── calendar.rs       # Module CalDAV - logique métier
 │   └── slots.rs          # Module slots - créneaux d'Infomaniak de 30 min
-└── ui/                   # Interface Infomaniak en wasm (crate indépendante sav_ui, voir ui/README.md)
+└── ui/                   # Interface Infomaniak en wasm (crate indépendante infomaniak_ui, voir ui/README.md)
     ├── Cargo.toml        # Crate wasm (cdylib, Yew)
-    ├── build.rs          # Injecte SAV_API_KEY / SAV_URL au build (depuis .env ou l'environnement)
     ├── src/lib.rs        # Client API + application Yew
     ├── src/tests.rs      # Tests wasm-bindgen-test (wasm-pack test --node)
-    ├── static/           # Bundle déployable: sav.js (initializer type GA), sav.css, pkg/, page de démo
+    ├── static/           # Bundle déployable: infomaniak.js (initializer type GA), infomaniak.css, pkg/, page de démo
     ├── scripts/smoke.mjs  # Test manuel du module contre le serveur réel
     └── pkg/              # Sortie wasm-pack (générée)
 ```
@@ -54,7 +53,7 @@ Un fichier absent est toléré (valeurs par défaut) ; un fichier invalide fait 
 | Section | Clé | Description | Défaut |
 |---------|-----|-------------|--------|
 | `[server]` | `port` | Port d'écoute | `8080` |
-| `[ui]` | `title` | Titre affiché par l'interface | `"SAV - Rendez-vous"` |
+| `[ui]` | `title` | Titre affiché par l'interface | `"Infomaniak - Rendez-vous"` |
 | `[ui]` | `placeholder`, `description_label`, `cancel_confirm`, ... | Textes de l'interface — **toute clé de `[ui]` est servie au module wasm au démarrage** via `GET /api/config` (défauts dans le code si absente) | défauts dans `ui/src/lib.rs` |
 | `[caldav]` | `url` | URL de base du serveur CalDAV | `https://sync.infomaniak.com/` |
 | `[caldav]` | `calendar_uri` | Chemin du calendar | — |
@@ -80,13 +79,13 @@ par défaut et les jours non listés sont **fermés** (aucun créneau).
 | `KMEET_API_TOKEN` | Token Bearer pour `api.infomaniak.com` |
 | `SMTP_USER` / `SMTP_PASSWORD` | Identifiants SMTP pour l'email de confirmation |
 | `SMTP_SEND_URL` / `SMTP_SEND_PORT` | Hôte et port SMTP (STARTTLS, défaut 587) |
-| `SAV_API_KEY` | Clé d'API exigée sur tous les endpoints (`Authorization: Bearer <clé>`) |
+| `INFOMANIAK_API_KEY` | Clé d'API exigée sur tous les endpoints (`Authorization: Bearer <clé>`) |
 
 ---
 
 ## Sécurité
 
-- **Authentification par clé d'API** : tous les endpoints exigent le header `Authorization: Bearer $SAV_API_KEY`. Sans clé valide : `401 Unauthorized`. La clé est destinée au backend appelant (l'utilisateur final est authentifié côté application, il ne saisit pas son email).
+- **Authentification par clé d'API** : tous les endpoints exigent le header `Authorization: Bearer $INFOMANIAK_API_KEY`. Sans clé valide : `401 Unauthorized`. La clé est destinée au backend appelant (l'utilisateur final est authentifié côté application, il ne saisit pas son email).
 - **Rate limiting** : `actix-governor`, par IP : 1 requête autorisée toutes les 10 secondes, burst de 50. Au-delà : `429 Too Many Requests`.
 - **CORS** : `actix-cors::Cors::permissive()` — le composant UI (crate `ui/` du monorepo, voir son README) appelle l'API depuis une autre origine. L'accès reste protégé par la clé d'API.
 - **HTTPS** : à terminer au reverse proxy (Caddy/nginx) devant le serveur ; actix écoute en HTTP.
@@ -219,7 +218,7 @@ La grille des débuts de créneaux est alignée sur le début de chaque période
 | `VISIO_BASE_URL` | Hostname kMeet (ex: `kmeet.infomaniak.com`) |
 
 **Notes :**
-- L'événement est créé avec le titre `SAV - {email}`, la description construite depuis `[booking] description_template` (placeholders `{description}`, `{email}`, `{name}`, `{start}`, `{end}`), timezone `Europe/Zurich`
+- L'événement est créé avec le titre `Infomaniak - {email}`, la description construite depuis `[booking] description_template` (placeholders `{description}`, `{email}`, `{name}`, `{start}`, `{end}`), timezone `Europe/Zurich`
 - Le client est ajouté en participant (`attendees` : `address` = email, `organizer: false`, `name` = nom du client, `state: "NEEDS-ACTION"`) — il reçoit l'invitation
 - Un **email de confirmation** est envoyé au client via SMTP (`[email]` de config.toml + secrets SMTP_* du `.env`) : meilleur effort, un échec SMTP est tracé sur stderr mais n'annule pas la réservation
 - Anti double-réservation : le `slot_id` est « claimé » atomiquement en mémoire (`Mutex<HashSet>`) pendant la vérification CalDAV + la création de l'événement ; une requête concurrente sur le même slot reçoit `409` immédiatement
@@ -236,7 +235,7 @@ La grille des débuts de créneaux est alignée sur le début de chaque période
 {
   "api_key": "9984a...",
   "ui": {
-    "title": "SAV - Rendez-vous",
+    "title": "Infomaniak - Rendez-vous",
     "placeholder": "Problème de connexion au boîtier...",
     "description_label": "Décrivez le problème :",
     "cancel_confirm": "Annuler votre rendez-vous ?"
@@ -250,7 +249,7 @@ La grille des débuts de créneaux est alignée sur le début de chaque période
 
 ### GET `/api/bookings/next?email=client@domain.com`
 
-**Description :** Retourne le **prochain rendez-vous** Infomaniak de l'utilisateur (le plus proche événement futur dont le titre est `SAV - {email}`), dans la semaine glissante. C'est ce qui alimente le bandeau de l'UI une fois un rendez-vous pris.
+**Description :** Retourne le **prochain rendez-vous** Infomaniak de l'utilisateur (le plus proche événement futur dont le titre est `Infomaniak - {email}` ; l'ancien titre `SAV - {email}` reste reconnu), dans la semaine glissante. C'est ce qui alimente le bandeau de l'UI une fois un rendez-vous pris.
 
 **Réponse (rendez-vous trouvé) :**
 ```json
@@ -415,13 +414,13 @@ cargo run
 
 Build multi-stage : `rust:1-alpine` compile un binaire **statique** en release
 (TLS via `rustls`, pas d'OpenSSL système), runtime `alpine:3.20`. Le conteneur
-sert **l'API et le bundle UI** (`ui/static` : sav.js, sav.css, module wasm,
+sert **l'API et le bundle UI** (`ui/static` : infomaniak.js, infomaniak.css, module wasm,
 page de démo) — une seule origine, pas de CORS nécessaire.
 
 ```bash
 make ui-build                      # build du module wasm + copie dans ui/static
-docker build -t sav-server .       # l'image embarque le bundle
-docker run --rm -p 8080:8080 --env-file .env sav-server
+docker build -t infomaniak-calendar-reservation .       # l'image embarque le bundle
+docker run --rm -p 8080:8080 --env-file .env infomaniak-calendar-reservation
 ```
 
 Ouvrir http://localhost:8080/ (page de démo intégrant le widget).

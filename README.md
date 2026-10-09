@@ -28,7 +28,7 @@ kMeet et envoie un email de confirmation (pièce jointe agenda incluse).
 ## Architecture
 
 ```
-sav/
+infomaniak-calendar-reservation/
 ├── srv/            # Serveur HTTP (Actix-web) : creneaux, réservations, emails
 ├── ui/             # Interface wasm (Yew) + initializer JS + bundle statique
 ├── config.toml     # Configuration non-secret
@@ -45,7 +45,7 @@ l'API HTTP du serveur. Documentation détaillée : [`AGENTS.md`](AGENTS.md)
 
 ```bash
 # 1. Secrets
-cp .env.example .env   # puis renseigner CALDAV_*, KMEET_API_TOKEN, SAV_API_KEY, SMTP_*
+cp .env.example .env   # puis renseigner CALDAV_*, KMEET_API_TOKEN, INFOMANIAK_API_KEY, SMTP_*
 
 # 2. En local
 make run               # serveur sur http://localhost:8080
@@ -54,8 +54,8 @@ python3 -m http.server 8000 --directory ui   # dev UI (page de démo)
 
 # 3. Ou en conteneur (API + UI sur une seule origine)
 make ui-build
-docker build -t sav-server .
-docker run --rm -p 8080:8080 --env-file .env sav-server
+docker build -t infomaniak-calendar-reservation .
+docker run --rm -p 8080:8080 --env-file .env infomaniak-calendar-reservation
 # -> http://localhost:8080/
 ```
 
@@ -69,7 +69,7 @@ docker run --rm -p 8080:8080 --env-file .env sav-server
 | `POST /api/bookings/cancel` | Annule le prochain rendez-vous d'un utilisateur |
 | `GET /api/bookings/next?email=` | Prochain rendez-vous (date, heure, lien visio) |
 
-Tous les endpoints exigent `Authorization: Bearer $SAV_API_KEY`. Détail des
+Tous les endpoints exigent `Authorization: Bearer $INFOMANIAK_API_KEY`. Détail des
 requêtes/réponses : [`AGENTS.md`](AGENTS.md).
 
 ## Configuration

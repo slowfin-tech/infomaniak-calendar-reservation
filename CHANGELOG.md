@@ -28,7 +28,7 @@ versionnement [SemVer](https://semver.org/lang/fr/).
 - Interface wasm (Yew) : calendrier des créneaux (libres/réservés, pause du
   midi matérialisée), formulaire de réservation, vue « votre rendez-vous »
   avec lien visio et annulation — affichage en modal
-- Initializer type Google Analytics (`sav.js`) : injection du CSS, file
+- Initializer type Google Analytics (`infomaniak.js`) : injection du CSS, file
   d'attente de commandes, chargement du module wasm au clic uniquement
 - Sécurité : authentification par clé d'API Bearer, rate limiting par IP
 - Docker : image multi-stage alpine (binaire statique musl) servant l'API

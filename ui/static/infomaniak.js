@@ -1,12 +1,12 @@
-// Chargeur du widget SAV - pattern "initializer" a la Google Analytics.
+// Chargeur du widget Infomaniak - pattern "initializer" a la Google Analytics.
 //
 // Sur la page hote:
 //
 //   <script>
-//     window.Sav = window.Sav || function () { (window.Sav.q = window.Sav.q || []).push(arguments); };
-//     Sav('init', { target: '#sav-widget', name: 'Jean Dupont', email: 'client@domain.com' });
+//     window.InfomaniakCalendar = window.InfomaniakCalendar || function () { (window.InfomaniakCalendar.q = window.InfomaniakCalendar.q || []).push(arguments); };
+//     InfomaniakCalendar('init', { target: '#infomaniak-widget', name: 'Jean Dupont', email: 'client@domain.com' });
 //   </script>
-//   <script async src="chemin/vers/sav.js"></script>
+//   <script async src="chemin/vers/infomaniak.js"></script>
 //
 // Le chargeur: injecte le CSS, cree le bouton + le conteneur, et charge le
 // module wasm (application Yew) uniquement au clic - jamais a l'ouverture.
@@ -17,13 +17,13 @@
 (function () {
   "use strict";
 
-  // Base des assets (sav.js etant servi depuis <base>/sav.js).
+  // Base des assets (infomaniak.js etant servi depuis <base>/infomaniak.js).
   var script = document.currentScript;
   var base = new URL(".", script.src).href;
 
   // File d'attente compatible avec le snippet ci-dessus: les appels faits
   // avant le chargement sont bufferses.
-  var queue = (window.Sav && window.Sav.q) || [];
+  var queue = (window.InfomaniakCalendar && window.InfomaniakCalendar.q) || [];
 
   var booted = false;
 
@@ -41,25 +41,25 @@
     // 1. CSS du widget.
     var link = document.createElement("link");
     link.rel = "stylesheet";
-    link.href = new URL("sav.css", base).href;
+    link.href = new URL("infomaniak.css", base).href;
     document.head.appendChild(link);
 
     // 2. Conteneur.
     var target = options.target ? document.querySelector(options.target) : document.body;
     if (!target) {
-      console.error("[Sav] cible introuvable:", options.target);
+      console.error("[InfomaniakCalendar] cible introuvable:", options.target);
       return;
     }
 
     var app = document.createElement("div");
-    app.className = "sav-app";
+    app.className = "infomaniak-app";
 
     var button = document.createElement("button");
     button.id = "load-slots";
     button.textContent = "Voir les créneaux";
 
     var root = document.createElement("div");
-    root.id = "sav-root";
+    root.id = "infomaniak-root";
 
     app.appendChild(button);
     app.appendChild(root);
@@ -68,25 +68,25 @@
     // 3. Configuration lisible par le module wasm. La cle d'API et les
     // textes viennent de GET /api/config au demarrage; apiUrl (optionnel)
     // designe un serveur d'API sur une autre origine.
-    window.__sav_config = {
+    window.__infomaniak_config = {
       email: options.email || null,
       name: options.name || null,
       apiUrl: options.apiUrl || null,
     };
 
     // 4. Le wasm n'est charge qu'au premier clic; la modal se re-ouvre via
-    // window.__savToggle aux clics suivants.
+    // window.__infomaniakToggle aux clics suivants.
     var loaded = false;
     button.addEventListener("click", function () {
       if (loaded) {
-        if (window.__savToggle) window.__savToggle();
+        if (window.__infomaniakToggle) window.__infomaniakToggle();
         return;
       }
 
       button.disabled = true;
       button.textContent = "Chargement...";
 
-      import(new URL("pkg/sav_ui.js", base).href)
+      import(new URL("pkg/infomaniak_ui.js", base).href)
         .then(function (mod) { return mod.default().then(function () { return mod; }); })
         .then(function (mod) {
           mod.run_app();
@@ -109,7 +109,7 @@
   for (var i = 0; i < queue.length; i++) {
     process(queue[i]);
   }
-  window.Sav = function () {
+  window.InfomaniakCalendar = function () {
     process(arguments);
   };
 })();

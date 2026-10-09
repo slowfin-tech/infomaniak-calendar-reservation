@@ -1355,6 +1355,45 @@ dependencies = [
 ]
 
 [[package]]
+name = "infomaniak-calendar-reservation"
+version = "0.1.0"
+dependencies = [
+ "actix-cors",
+ "actix-files",
+ "actix-governor",
+ "actix-web",
+ "base64 0.21.7",
+ "chrono",
+ "chrono-tz",
+ "dotenvy",
+ "ical",
+ "lettre",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "toml",
+]
+
+[[package]]
+name = "infomaniak_ui"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "console_error_panic_hook",
+ "js-sys",
+ "reqwest",
+ "serde",
+ "serde-wasm-bindgen",
+ "serde_json",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "wasm-bindgen-test",
+ "web-sys",
+ "yew",
+]
+
+[[package]]
 name = "ipnet"
 version = "2.12.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2120,46 +2159,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "93fc1dc3aaa9bfed95e02e6eadabb4baf7e3078b0bd1b4d7b6b0b68378900502"
 dependencies = [
  "winapi-util",
-]
-
-[[package]]
-name = "sav_server"
-version = "0.1.0"
-dependencies = [
- "actix-cors",
- "actix-files",
- "actix-governor",
- "actix-web",
- "base64 0.21.7",
- "chrono",
- "chrono-tz",
- "dotenvy",
- "ical",
- "lettre",
- "reqwest",
- "serde",
- "serde_json",
- "tokio",
- "toml",
-]
-
-[[package]]
-name = "sav_ui"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "console_error_panic_hook",
- "js-sys",
- "reqwest",
- "serde",
- "serde-wasm-bindgen",
- "serde_json",
- "toml",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "wasm-bindgen-test",
- "web-sys",
- "yew",
 ]
 
 [[package]]

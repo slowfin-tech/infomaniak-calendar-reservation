@@ -10,7 +10,7 @@ use lettre::message::{Attachment, MultiPart, SinglePart};
 use lettre::transport::smtp::authentication::Credentials;
 use lettre::{AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor};
 
-const DEFAULT_SUBJECT: &str = "Votre rendez-vous SAV";
+const DEFAULT_SUBJECT: &str = "Votre rendez-vous Infomaniak";
 const DEFAULT_BODY: &str = "\
 Bonjour {name},
 
@@ -21,7 +21,7 @@ Lien visio : {link}
 Motif : {description}
 
 Cordialement,
-Le service SAV";
+Le service Infomaniak";
 
 /// Donnees injectables dans les modeles d'email.
 pub(crate) struct EmailData {
@@ -84,7 +84,7 @@ fn ics_fold(line: &str) -> String {
 /// attache a l'email, il permet au client de l'ajouter a son agenda.
 pub(crate) fn build_ics(data: &EmailData, sender: &str) -> String {
     let now_utc = chrono::Utc::now().format("%Y%m%dT%H%M%SZ");
-    let summary = format!("Rendez-vous SAV - {}", data.name);
+    let summary = format!("Rendez-vous Infomaniak - {}", data.name);
     let mut description = data.description.clone();
     if !data.link.is_empty() {
         description.push_str(&format!("\nLien visio : {}", data.link));
@@ -93,10 +93,10 @@ pub(crate) fn build_ics(data: &EmailData, sender: &str) -> String {
     let lines = [
         "BEGIN:VCALENDAR".to_string(),
         "VERSION:2.0".to_string(),
-        "PRODID:-//slowfintech//SAV//FR".to_string(),
+        "PRODID:-//slowfin-tech//infomaniak-calendar-reservation//FR".to_string(),
         "METHOD:PUBLISH".to_string(),
         "BEGIN:VEVENT".to_string(),
-        format!("UID:sav-{}@slowfintech.com", data.start.replace(['-', ' ', ':'], "")),
+        format!("UID:infomaniak-{}@slowfintech.com", data.start.replace(['-', ' ', ':'], "")),
         format!("DTSTAMP:{}", now_utc),
         format!("DTSTART;TZID=Europe/Zurich:{}", ics_datetime(&data.start)),
         format!("DTEND;TZID=Europe/Zurich:{}", ics_datetime(&data.end)),
@@ -155,7 +155,7 @@ pub(crate) async fn send_confirmation(data: &EmailData) -> Result<(), String> {
     let ics_content_type =
         ContentType::parse("text/calendar; charset=utf-8; method=PUBLISH")
             .map_err(|e| format!("content-type ics invalide: {e}"))?;
-    let ics = Attachment::new("rendez-vous-sav.ics".to_string())
+    let ics = Attachment::new("rendez-vous-infomaniak.ics".to_string())
         .body(build_ics(data, &config.sender), ics_content_type);
     let multipart = MultiPart::mixed().singlepart(plain).singlepart(ics);
 
@@ -222,12 +222,12 @@ mod tests {
 
     #[test]
     fn ics_genere_coherent() {
-        let ics = build_ics(&data(), "sav@slowfintech.com");
+        let ics = build_ics(&data(), "noreply@slowfintech.com");
         assert!(ics.starts_with("BEGIN:VCALENDAR\r\n"));
         assert!(ics.contains("METHOD:PUBLISH"));
         assert!(ics.contains("DTSTART;TZID=Europe/Zurich:20261012T100000"));
         assert!(ics.contains("DTEND;TZID=Europe/Zurich:20261012T103000"));
-        assert!(ics.contains("SUMMARY:Rendez-vous SAV - Jean Dupont"));
+        assert!(ics.contains("SUMMARY:Rendez-vous Infomaniak - Jean Dupont"));
         assert!(ics.contains("LOCATION:https://kmeet.infomaniak.com/abc123"));
         assert!(ics.contains("ATTENDEE:mailto:client@domain.com"));
         assert!(ics.contains("STATUS:CONFIRMED"));

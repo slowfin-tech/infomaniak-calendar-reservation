@@ -1,16 +1,16 @@
 .PHONY: run docker-run ui-build ui-serve ui-test smoke test
 
-# Serveur SAV en local (lit le .env via dotenvy)
+# Serveur Infomaniak en local (lit le .env via dotenvy)
 run:
 	cargo run
 
-# Serveur SAV en conteneur
+# Serveur Infomaniak en conteneur
 docker-run:
-	docker build -t sav-server .
-	docker run --rm -p 8080:8080 --env-file .env sav-server
+	docker build -t infomaniak-calendar-reservation .
+	docker run --rm -p 8080:8080 --env-file .env infomaniak-calendar-reservation
 
 # Interface wasm: build + bundle deployable dans ui/static/
-# (sav.js, sav.css, index.html de demo + pkg/ copie)
+# (infomaniak.js, infomaniak.css, index.html de demo + pkg/ copie)
 ui-build:
 	cd ui && wasm-pack build --target web && rm -rf static/pkg && cp -R pkg static/pkg
 

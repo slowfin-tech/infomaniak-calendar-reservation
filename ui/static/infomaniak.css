@@ -1,7 +1,7 @@
-/* Styles du widget SAV - injectes par sav.js, scopes sous .sav-app. */
+/* Styles du widget Infomaniak - injectes par infomaniak.js, scopes sous .infomaniak-app. */
 
 /* Modal: overlay assombri cliquable pour fermer, dialogue centre. */
-.sav-app .sav-overlay {
+.infomaniak-app .infomaniak-overlay {
   position: fixed;
   inset: 0;
   background: rgba(0, 0, 0, 0.5);
@@ -11,7 +11,7 @@
   z-index: 9999;
   padding: 1rem;
 }
-.sav-app .sav-modal {
+.infomaniak-app .infomaniak-modal {
   position: relative;
   background: white;
   border-radius: 12px;
@@ -22,14 +22,14 @@
   padding: 1.5rem;
   box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
 }
-.sav-app .sav-modal-header {
+.infomaniak-app .infomaniak-modal-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   margin-bottom: 0.75rem;
 }
-.sav-app .sav-modal-header h1 { margin: 0; }
-.sav-app button.sav-close {
+.infomaniak-app .infomaniak-modal-header h1 { margin: 0; }
+.infomaniak-app button.infomaniak-close {
   background: none;
   border: none;
   font-size: 1.6rem;
@@ -37,28 +37,28 @@
   color: #666;
   padding: 0.2rem 0.5rem;
 }
-.sav-app button.sav-close:hover { box-shadow: none; color: #c22; }
+.infomaniak-app button.infomaniak-close:hover { box-shadow: none; color: #c22; }
 
-.sav-app button {
+.infomaniak-app button {
   border-radius: 8px;
   padding: 0.5rem 1rem;
   cursor: pointer;
   font-size: 1rem;
   transition: box-shadow 0.15s ease, background-color 0.15s ease;
 }
-.sav-app button:hover { box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2); }
-.sav-app button:disabled { opacity: 0.6; cursor: default; box-shadow: none; }
-.sav-app button#load-slots { background: #17855a; color: white; border: 1px solid #17855a; }
+.infomaniak-app button:hover { box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2); }
+.infomaniak-app button:disabled { opacity: 0.6; cursor: default; box-shadow: none; }
+.infomaniak-app button#load-slots { background: #17855a; color: white; border: 1px solid #17855a; }
 
-.sav-app h1 { font-size: 1.5rem; margin: 0 0 0.5rem; }
-.sav-app h2 { font-size: 1.15rem; margin: 0 0 0.5rem; }
+.infomaniak-app h1 { font-size: 1.5rem; margin: 0 0 0.5rem; }
+.infomaniak-app h2 { font-size: 1.15rem; margin: 0 0 0.5rem; }
 
-.sav-app .day { margin-top: 1rem; }
-.sav-app .day h3 { margin-bottom: 0.25rem; font-size: 1rem; }
-.sav-app .slots { display: flex; flex-wrap: wrap; gap: 0.5rem; justify-content: center; align-items: center; }
+.infomaniak-app .day { margin-top: 1rem; }
+.infomaniak-app .day h3 { margin-bottom: 0.25rem; font-size: 1rem; }
+.infomaniak-app .slots { display: flex; flex-wrap: wrap; gap: 0.5rem; justify-content: center; align-items: center; }
 /* Marqueur de pause entre deux periodes: separateur vertical inline, de
    la meme hauteur que les creneaux, tout reste sur une ligne (ecran large). */
-.sav-app .break {
+.infomaniak-app .break {
   flex: 0 0 auto;
   align-self: stretch;
   box-sizing: border-box;
@@ -70,7 +70,7 @@
 /* En mobile: le marqueur devient un trait pleine largeur et force les
    periodes sur des lignes separees. */
 @media (max-width: 700px) {
-  .sav-app .break {
+  .infomaniak-app .break {
     flex-basis: 100%;
     width: auto;
     height: 1px;
@@ -80,22 +80,22 @@
     margin: 0.4rem 0;
   }
 }
-.sav-app .slot {
+.infomaniak-app .slot {
   border: 1px solid #2a7;
   border-radius: 6px;
   padding: 0.4rem 0.7rem;
   background: #f0faf5;
   transition: box-shadow 0.15s ease, background-color 0.15s ease, border-color 0.15s ease;
 }
-.sav-app .slot.clickable { cursor: pointer; }
-.sav-app .slot.clickable:hover {
+.infomaniak-app .slot.clickable { cursor: pointer; }
+.infomaniak-app .slot.clickable:hover {
   background: #d5f2e3;
   border-color: #17855a;
   box-shadow: 0 2px 8px rgba(23, 133, 90, 0.25);
 }
-.sav-app .slot.booked { background: #fdebd0; border-color: #e67e22; color: #a04000; cursor: default; }
+.infomaniak-app .slot.booked { background: #fdebd0; border-color: #e67e22; color: #a04000; cursor: default; }
 
-.sav-app .next-booking {
+.infomaniak-app .next-booking {
   background: #eaf4ff;
   border: 1px solid #4a90d9;
   border-radius: 8px;
@@ -104,27 +104,27 @@
   font-weight: 600;
 }
 
-.sav-app .booking-form { margin-top: 1rem; max-width: 480px; }
-.sav-app .booking-form label { display: block; margin: 0.5rem 0 0.25rem; font-size: 0.9rem; }
-.sav-app .booking-form textarea {
+.infomaniak-app .booking-form { margin-top: 1rem; max-width: 480px; }
+.infomaniak-app .booking-form label { display: block; margin: 0.5rem 0 0.25rem; font-size: 0.9rem; }
+.infomaniak-app .booking-form textarea {
   width: 100%;
   box-sizing: border-box;
   padding: 0.4rem;
   border-radius: 8px;
   border: 1px solid #ccc;
 }
-.sav-app .booking-form textarea:focus {
+.infomaniak-app .booking-form textarea:focus {
   outline: none;
   border-color: #17855a;
   box-shadow: 0 2px 8px rgba(23, 133, 90, 0.25);
 }
 
-.sav-app .actions { margin-top: 0.75rem; display: flex; gap: 0.5rem; align-items: center; }
-.sav-app .actions .primary { background: #17855a; color: white; border: 1px solid #17855a; }
+.infomaniak-app .actions { margin-top: 0.75rem; display: flex; gap: 0.5rem; align-items: center; }
+.infomaniak-app .actions .primary { background: #17855a; color: white; border: 1px solid #17855a; }
 /* Vue rendez-vous: le bouton d'annulation est aligne en bas a droite. */
-.sav-app .actions.appointment-actions { justify-content: flex-end; margin-top: 1.5rem; }
+.infomaniak-app .actions.appointment-actions { justify-content: flex-end; margin-top: 1.5rem; }
 /* Lien "Rejoindre la visio": jaune-orange clair, avec picto camera video. */
-.sav-app a.visio-link {
+.infomaniak-app a.visio-link {
   display: inline-flex;
   align-items: center;
   gap: 0.5rem;
@@ -139,15 +139,15 @@
   font-weight: 600;
   transition: box-shadow 0.15s ease, background-color 0.15s ease;
 }
-.sav-app a.visio-link:hover {
+.infomaniak-app a.visio-link:hover {
   box-shadow: 0 2px 8px rgba(240, 181, 47, 0.5);
   background: #f0b52f;
 }
-.sav-app a.visio-link svg { flex: 0 0 auto; }
-.sav-app .actions button:not(.primary) { background: white; border: 1px solid #999; }
-.sav-app .actions button.danger { background: #c0392b; color: white; border: 1px solid #c0392b; }
-.sav-app .actions button.danger:hover { box-shadow: 0 2px 8px rgba(192, 57, 43, 0.4); }
+.infomaniak-app a.visio-link svg { flex: 0 0 auto; }
+.infomaniak-app .actions button:not(.primary) { background: white; border: 1px solid #999; }
+.infomaniak-app .actions button.danger { background: #c0392b; color: white; border: 1px solid #c0392b; }
+.infomaniak-app .actions button.danger:hover { box-shadow: 0 2px 8px rgba(192, 57, 43, 0.4); }
 
-.sav-app p { font-style: italic; }
-.sav-app p.hint { font-size: 0.9rem; color: #666; }
-.sav-app p.error { color: #c22; }
+.infomaniak-app p { font-style: italic; }
+.infomaniak-app p.hint { font-size: 0.9rem; color: #666; }
+.infomaniak-app p.error { color: #c22; }

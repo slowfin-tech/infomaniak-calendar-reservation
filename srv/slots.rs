@@ -1,4 +1,4 @@
-//! Module for SAV slots: time windows derived from CalDAV events.
+//! Module for reservation slots: time windows derived from CalDAV events.
 //!
 //! A slot ID is formatted `YYYYMMDDHHMM` (start of the slot, Europe/Zurich
 //! local time as returned by the calendar). Slot duration and daily periods
@@ -31,18 +31,8 @@ pub struct SlotsResponse {
     pub duration_minutes: i64,
 }
 
-/// Configuration des creneaux.
+/// Configuration des creneaux (section [slots] de config.toml).
 ///
-/// Variables d'environnement:
-/// - `SAV_SLOT_DURATION`: duree des creneaux en minutes (defaut 30)
-/// - `SAV_PERIODS`: JSON des periodes par jour de semaine. Cles: mon, tue,
-///   wed, thu, fri, sat, sun. Chaque jour liste des periodes "HH:MM-HH:MM".
-///   Exemple:
-///   `SAV_PERIODS={"mon":["10:00-12:00","14:00-16:00"],"sat":["10:00-12:00"]}`
-///
-/// Si `SAV_PERIODS` est defini, il remplace la configuration par defaut
-/// (tous les jours 10:00-12:00 et 14:00-16:00): les jours non listes sont
-/// fermes (aucun creneau).
 #[derive(Debug, Clone)]
 pub struct SlotsConfig {
     /// Duree d'un creneau en minutes.
@@ -101,7 +91,6 @@ impl SlotsConfig {
         std::array::from_fn(|_| Self::default_periods())
     }
 
-    /// Parse le JSON SAV_PERIODS: jours non listes = fermes.
     /// Debuts (heure, minute) des creneaux pour un jour de semaine donne.
     pub fn starts_for(&self, weekday: usize) -> Vec<(u32, u32)> {
         let mut starts = Vec::new();

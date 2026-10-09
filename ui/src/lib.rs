@@ -1,11 +1,11 @@
-//! Interface SAV compilee en wasm: client API + rendu Yew.
+//! Interface de réservation Infomaniak compilée en wasm: client API + rendu Yew.
 //!
-//! Parametres de build (voir build.rs): SAV_API_KEY et SAV_URL sont
-//! incorpores au module - la page n'a rien a configurer.
+//! Aucune configuration n'est compilee dans le module: la cle d'API et les
+//! textes sont charges au demarrage via GET /api/config.
 //! L'email du client est passe en parametre d'URL de la page: ?email=...
 //!
-//! La page hote (static/) ne charge PAS le wasm a l'ouverture: app.js importe
-//! dynamiquement /pkg/sav_ui.js au clic puis appelle run_app().
+//! La page hote (static/) ne charge PAS le wasm a l'ouverture: infomaniak.js
+//! importe dynamiquement /pkg/infomaniak_ui.js au clic puis appelle run_app().
 
 use std::collections::BTreeMap;
 
@@ -116,24 +116,24 @@ async fn fetch_runtime_config(base: &str) -> Result<RuntimeConfig, String> {
 }
 
 #[derive(Clone)]
-pub(crate) struct SavClient {
+pub(crate) struct ApiClient {
     base_url: String,
     api_key: String,
 }
 
-impl SavClient {
-    fn new(base_url: String, api_key: String) -> SavClient {
-        SavClient {
+impl ApiClient {
+    fn new(base_url: String, api_key: String) -> ApiClient {
+        ApiClient {
             base_url: base_url.trim_end_matches('/').to_string(),
             api_key,
         }
     }
 
     /// Client depuis la configuration runtime (fetch de /api/config).
-    pub(crate) async fn from_runtime_config() -> Result<SavClient, String> {
+    pub(crate) async fn from_runtime_config() -> Result<ApiClient, String> {
         let base = resolve_base_url(&config_value("apiUrl").unwrap_or_default());
         let config = fetch_runtime_config(&base).await?;
-        Ok(SavClient::new(base, config.api_key))
+        Ok(ApiClient::new(base, config.api_key))
     }
 
     /// Recupere la configuration runtime (api/config ne demande pas la cle:
@@ -189,7 +189,7 @@ impl SavClient {
         response.json().await.map_err(|e| format!("reponse illisible: {e}"))
     }
 
-    /// Prochain rendez-vous SAV de cet utilisateur (null s'il n'en a pas).
+    /// Prochain rendez-vous de cet utilisateur (null s'il n'en a pas).
     pub(crate) async fn next_booking(&self, email: &str) -> Result<Option<NextBooking>, String> {
         let response = reqwest::Client::new()
             .get(format!("{}/api/bookings/next", self.base_url))
@@ -253,11 +253,11 @@ fn query_param(name: &str) -> Option<String> {
 }
 
 /// Valeur de configuration pour l'application: d'abord celle de
-/// l'initialiseur (window.__sav_config, posee par sav.js), puis le
+/// l'initialiseur (window.__infomaniak_config, posee par infomaniak.js), puis le
 /// parametre d'URL en repli.
 fn config_value(key: &str) -> Option<String> {
     let global = js_sys::global();
-    if let Ok(config) = js_sys::Reflect::get(&global, &JsValue::from("__sav_config")) {
+    if let Ok(config) = js_sys::Reflect::get(&global, &JsValue::from("__infomaniak_config")) {
         if !config.is_undefined() && !config.is_null() {
             let value = js_sys::Reflect::get(&config, &JsValue::from(key)).ok();
             if let Some(value) = value.and_then(|v| v.as_string()) {
@@ -373,7 +373,7 @@ fn App() -> Html {
     let next_booking = use_state(|| Option::<NextBooking>::None);
 
     // Ouverture de la modal: montee au premier clic du bouton hote, puis
-    // re-ouverte via window.__savToggle pose par l'effet de montage.
+    // re-ouverte via window.__infomaniakToggle pose par l'effet de montage.
     let open = use_state(|| true);
 
     // Configuration runtime: chargee au demarrage depuis GET /api/config
@@ -381,7 +381,7 @@ fn App() -> Html {
     let runtime_config = use_state(|| None::<RuntimeConfig>);
     let client = use_memo((*runtime_config).clone(), move |config| {
         config.clone().map(|config| {
-            SavClient::new(
+            ApiClient::new(
                 resolve_base_url(&config_value("apiUrl").unwrap_or_default()),
                 config.api_key.clone(),
             )
@@ -441,7 +441,7 @@ fn App() -> Html {
         let is_error = is_error.clone();
         use_effect_with((), move |_| {
             wasm_bindgen_futures::spawn_local(async move {
-                match SavClient::fetch_config().await {
+                match ApiClient::fetch_config().await {
                     Ok(config) => runtime_config.set(Some(config)),
                     Err(e) => {
                         is_error.set(true);
@@ -462,8 +462,8 @@ fn App() -> Html {
         });
     }
 
-    // Expose au chargeur (sav.js) la reouverture de la modal: le bouton hote
-    // appelle window.__savToggle() aux clics suivant le premier chargement.
+    // Expose au chargeur (infomaniak.js) la reouverture de la modal: le bouton hote
+    // appelle window.__infomaniakToggle() aux clics suivant le premier chargement.
     {
         let open = open.clone();
         use_effect_with((), move |_| {
@@ -472,10 +472,10 @@ fn App() -> Html {
             });
             js_sys::Reflect::set(
                 &js_sys::global(),
-                &JsValue::from("__savToggle"),
+                &JsValue::from("__infomaniakToggle"),
                 toggle.as_ref(),
             )
-            .expect("pose de __savToggle");
+            .expect("pose de __infomaniakToggle");
             std::mem::forget(toggle);
         });
     }
@@ -786,11 +786,11 @@ fn App() -> Html {
     }
 
     html! {
-        <div class="sav-overlay" onclick={close_modal.reform(|_| ())}>
-            <div class="sav-modal" role="dialog" aria-modal="true" onclick={swallow_click}>
-                <div class="sav-modal-header">
-                    <h1>{ (*runtime_config).as_ref().map(|config| ui_text(&config.ui, "title", "SAV - Rendez-vous")).unwrap_or_else(|| "SAV - Rendez-vous".to_string()) }</h1>
-                    <button class="sav-close" aria-label="Fermer" onclick={close_modal.reform(|_| ())}>
+        <div class="infomaniak-overlay" onclick={close_modal.reform(|_| ())}>
+            <div class="infomaniak-modal" role="dialog" aria-modal="true" onclick={swallow_click}>
+                <div class="infomaniak-modal-header">
+                    <h1>{ (*runtime_config).as_ref().map(|config| ui_text(&config.ui, "title", "Infomaniak - Rendez-vous")).unwrap_or_else(|| "Infomaniak - Rendez-vous".to_string()) }</h1>
+                    <button class="infomaniak-close" aria-label="Fermer" onclick={close_modal.reform(|_| ())}>
                         { "×" }
                     </button>
                 </div>
@@ -805,7 +805,7 @@ pub fn run_app() {
     console_error_panic_hook::set_once();
     let root = web_sys::window()
         .and_then(|w| w.document())
-        .and_then(|d| d.get_element_by_id("sav-root"));
+        .and_then(|d| d.get_element_by_id("infomaniak-root"));
     match root {
         Some(root) => yew::Renderer::<App>::with_root(root).render(),
         None => yew::Renderer::<App>::new().render(),
@@ -816,7 +816,7 @@ pub fn run_app() {
 
 #[wasm_bindgen]
 pub async fn smoke_list_slots() -> Result<JsValue, JsValue> {
-    let slots = SavClient::from_runtime_config()
+    let slots = ApiClient::from_runtime_config()
         .await
         .map_err(|e| JsValue::from_str(&e))?
         .week_slots()
@@ -836,7 +836,7 @@ pub async fn smoke_book(
     description: String,
     slot_id: String,
 ) -> Result<JsValue, JsValue> {
-    let booking = SavClient::from_runtime_config()
+    let booking = ApiClient::from_runtime_config()
         .await
         .map_err(|e| JsValue::from_str(&e))?
         .book(name, email, description, slot_id)

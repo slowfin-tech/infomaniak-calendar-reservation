@@ -1,5 +1,5 @@
 [package]
-name = "sav_ui"
+name = "infomaniak_ui"
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
@@ -23,6 +23,3 @@ web-sys = { version = "0.3", features = ["Window", "Location", "Document", "Elem
 
 [dev-dependencies]
 wasm-bindgen-test = "0.3"
-
-[build-dependencies]
-toml = "1"

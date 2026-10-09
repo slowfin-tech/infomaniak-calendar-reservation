@@ -1,6 +1,6 @@
 //! Configuration non-secret, chargee depuis `config.toml` (chemin par
 //! defaut, surchargeable via `CONFIG_PATH`). Les secrets restent dans le
-//! `.env` (CALDAV_LOGIN, CALDAV_PASSWORD, KMEET_API_TOKEN, SAV_API_KEY).
+//! `.env` (CALDAV_LOGIN, CALDAV_PASSWORD, KMEET_API_TOKEN, INFOMANIAK_API_KEY).
 //!
 //! Chargee une seule fois au demarrage puis accesible via `config::global()`.
 
@@ -51,7 +51,7 @@ pub struct UiConfig {
 impl Default for UiConfig {
     fn default() -> Self {
         UiConfig {
-            title: "SAV - Rendez-vous".to_string(),
+            title: "Infomaniak - Rendez-vous".to_string(),
             texts: std::collections::BTreeMap::new(),
         }
     }
@@ -180,7 +180,7 @@ mod tests {
             port = 9090
 
             [ui]
-            title = "Mon SAV"
+            title = "Mon titre"
             placeholder = "Decrivez le probleme"
             cancel_confirm = "Confirmer ?"
 
@@ -204,7 +204,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(config.server.port, 9090);
-        assert_eq!(config.ui.title, "Mon SAV");
+        assert_eq!(config.ui.title, "Mon titre");
         // Les autres cles [ui] sont capturees telles quelles.
         assert_eq!(config.ui.texts.get("placeholder").map(String::as_str), Some("Decrivez le probleme"));
         assert_eq!(config.caldav.url, "https://caldav.example.com/");
@@ -221,7 +221,7 @@ mod tests {
     fn defauts_quand_absent() {
         let config: AppConfig = toml::from_str("").unwrap();
         assert_eq!(config.server.port, 8080);
-        assert_eq!(config.ui.title, "SAV - Rendez-vous");
+        assert_eq!(config.ui.title, "Infomaniak - Rendez-vous");
         assert_eq!(config.slots.duration_minutes, None);
         assert!(config.slots.periods.is_none());
     }

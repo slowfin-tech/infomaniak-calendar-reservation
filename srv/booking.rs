@@ -1,4 +1,4 @@
-//! Booking module: reserve a SAV slot by creating an event on the Infomaniak
+//! Booking module: reserve a slot by creating an event on the Infomaniak
 //! calendar via the "Plan a conference" API (POST /1/kmeet/rooms), which adds
 //! the event on the calendar with the meeting URL.
 
@@ -84,7 +84,7 @@ pub fn parse_slot_id(slot_id: &str) -> Option<NaiveDateTime> {
 }
 
 /// Le slot_id designe-t-il un vrai debut de creneau pour le jour concerne
-/// (grille configuree: duree et periodes via SAV_SLOT_DURATION / SAV_PERIODS) ?
+/// (grille configuree: duree et periodes de [slots] dans config.toml) ?
 fn is_valid_slot_start(config: &SlotsConfig, slot_start: &NaiveDateTime) -> bool {
     let weekday = slot_start.date().weekday().num_days_from_monday() as usize;
     config.is_valid_start(weekday, slot_start.hour(), slot_start.minute())
@@ -103,7 +103,7 @@ async fn create_calendar_event(
     duration_minutes: i64,
 ) -> Result<serde_json::Value, String> {
     let slot_end = slot_start + Duration::minutes(duration_minutes);
-    let title = truncate(&format!("SAV - {}", request.email.trim()), 150);
+    let title = truncate(&format!("Infomaniak - {}", request.email.trim()), 150);
     let start = slot_start.format("%Y-%m-%d %H:%M:%S").to_string();
     let end = slot_end.format("%Y-%m-%d %H:%M:%S").to_string();
     let description_template = crate::config::global()
@@ -218,14 +218,15 @@ struct NextBookingResponse {
     next_booking: Option<NextBooking>,
 }
 
-/// Titre d'un evenement de reservation SAV pour cet email ?
-/// Les reservations sont creees avec le titre "SAV - {email}".
-fn is_sav_event_for(summary: &str, email: &str) -> bool {
+/// Titre d'un evenement de reservation pour cet email ? Les reservations
+/// sont creees avec le titre "Infomaniak - {email}". L'ancien prefixe
+/// "SAV - {email}" (avant renommage du projet) reste reconnu.
+fn is_reservation_event_for(summary: &str, email: &str) -> bool {
     let summary = summary.trim().to_lowercase();
-    let Some(rest) = summary.strip_prefix("sav - ") else {
-        return false;
-    };
-    rest.trim() == email
+    let rest = summary
+        .strip_prefix("infomaniak - ")
+        .or_else(|| summary.strip_prefix("sav - "));
+    rest.is_some_and(|rest| rest.trim() == email)
 }
 
 /// Extrait le lien de la salle visio depuis le contenu d'un evenement
@@ -246,7 +247,7 @@ fn extract_visio_link(content: &str) -> Option<String> {
     Some(url.to_string())
 }
 
-/// Retourne le prochain rendez-vous SAV (evenement futur le plus proche)
+/// Retourne le prochain rendez-vous (evenement futur le plus proche)
 /// de cet utilisateur dans la semaine glissante.
 fn find_next_booking(
     events: &[crate::calendar::RawEvent],
@@ -256,7 +257,7 @@ fn find_next_booking(
     let email = email.trim().to_lowercase();
     events
         .iter()
-        .filter(|event| is_sav_event_for(&event.summary, &email) && event.start > now)
+        .filter(|event| is_reservation_event_for(&event.summary, &email) && event.start > now)
         .min_by_key(|event| event.start)
         .map(|event| {
             // Lien visio: propriete dediee X-INFOMANIAK-MEET-ROOM-URL en
@@ -291,7 +292,7 @@ fn find_next_booking_uid(
     let email = email.trim().to_lowercase();
     events
         .iter()
-        .filter(|event| is_sav_event_for(&event.summary, &email) && event.start > now)
+        .filter(|event| is_reservation_event_for(&event.summary, &email) && event.start > now)
         .min_by_key(|event| event.start)
         .and_then(|event| event.uid.clone())
 }
@@ -535,11 +536,11 @@ mod tests {
         };
 
         let events = vec![
-            event("SAV - autre@domain.com", 10, 11, Some("uid-autre"), None), // autre utilisateur
-            event("SAV - client@domain.com", 15, 16, Some("uid-tardif"), None), // plus tard
-            event("SAV - client@domain.com", 11, 12, Some("uid-proche"), Some("Rendez-vous\nLien: https://kmeet.infomaniak.com/room123.")), // doit gagner
-            event("SAV - client@domain.com", 8, 9, Some("uid-passe"), None), // passe: ignore
-            event("RDV equipe", 10, 11, None, None), // hors SAV
+            event("Infomaniak - autre@domain.com", 10, 11, Some("uid-autre"), None), // autre utilisateur
+            event("Infomaniak - client@domain.com", 15, 16, Some("uid-tardif"), None), // plus tard
+            event("Infomaniak - client@domain.com", 11, 12, Some("uid-proche"), Some("Rendez-vous\nLien: https://kmeet.infomaniak.com/room123.")), // doit gagner
+            event("Infomaniak - client@domain.com", 8, 9, Some("uid-passe"), None), // passe: ignore
+            event("RDV equipe", 10, 11, None, None), // hors reservation
         ];
 
         let next = find_next_booking(&events, "Client@Domain.com ", now).unwrap();
@@ -585,12 +586,15 @@ mod tests {
     }
 
     #[test]
-    fn titre_sav_reconnu_insensible_casse() {
-        assert!(is_sav_event_for("SAV - client@domain.com", "client@domain.com"));
-        assert!(is_sav_event_for("sav - CLIENT@domain.com", "client@domain.com"));
-        assert!(!is_sav_event_for("SAV - autre@domain.com", "client@domain.com"));
-        assert!(!is_sav_event_for("SAV equipe", "client@domain.com"));
-        assert!(!is_sav_event_for("client@domain.com", "client@domain.com"));
+    fn titre_reconnu_insensible_casse() {
+        assert!(is_reservation_event_for("Infomaniak - client@domain.com", "client@domain.com"));
+        assert!(is_reservation_event_for("infomaniak - CLIENT@domain.com", "client@domain.com"));
+        // Ancien prefixe (avant renommage du projet) toujours reconnu.
+        assert!(is_reservation_event_for("SAV - client@domain.com", "client@domain.com"));
+        assert!(is_reservation_event_for("sav - CLIENT@domain.com", "client@domain.com"));
+        assert!(!is_reservation_event_for("Infomaniak - autre@domain.com", "client@domain.com"));
+        assert!(!is_reservation_event_for("SAV equipe", "client@domain.com"));
+        assert!(!is_reservation_event_for("client@domain.com", "client@domain.com"));
     }
 
     #[test]
@@ -618,11 +622,11 @@ mod tests {
             description: "Probleme de connexion".to_string(),
             slot_id: "202610031400".to_string(),
         };
-        let template = "Rendez-vous SAV\nProblème : {description}\nClient : {name} ({email})\nCréneau : {start} -> {end}";
+        let template = "Rendez-vous Infomaniak\nProblème : {description}\nClient : {name} ({email})\nCréneau : {start} -> {end}";
         let rendered = render_description(template, &request, "2026-10-03 14:00:00", "2026-10-03 14:30:00");
         assert_eq!(
             rendered,
-            "Rendez-vous SAV\nProblème : Probleme de connexion\nClient : Jean Dupont (client@domain.com)\nCréneau : 2026-10-03 14:00:00 -> 2026-10-03 14:30:00"
+            "Rendez-vous Infomaniak\nProblème : Probleme de connexion\nClient : Jean Dupont (client@domain.com)\nCréneau : 2026-10-03 14:00:00 -> 2026-10-03 14:30:00"
         );
     }
 
