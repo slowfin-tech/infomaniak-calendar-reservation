@@ -67,7 +67,8 @@ jobs:
 
   # Image Docker multi-arch (linux/amd64 + linux/arm64): binaires
   # precompiles (pas de compilation Rust dans le conteneur, build rapide),
-  # push vers GHCR hors pull requests.
+  # push vers GHCR hors pull requests. Le nom de l'image suit le nom du
+  # repository (ghcr.io/slowfin-tech/infomaniak-calendar-reservation).
   docker:
     name: Image Docker multi-arch (GHCR)
     needs: build
@@ -98,7 +99,9 @@ jobs:
       - id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository_owner }}/sav-server
+          # L'image suit le nom du repository: renommer le repo renomme
+          # l'image au prochain passage de la CI.
+          images: ghcr.io/${{ github.repository }}
           tags: |
             type=ref,event=branch
             type=semver,pattern={{version}}
